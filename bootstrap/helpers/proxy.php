@@ -250,6 +250,9 @@ function generateDefaultProxyConfiguration(Server $server, array $custom_command
                         '--certificatesresolvers.letsencrypt.acme.httpchallenge=true',
                         '--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=http',
                         '--certificatesresolvers.letsencrypt.acme.storage=/traefik/acme.json',
+                        // DNS-01 challenge resolver for wildcard certificates
+                        '--certificatesresolvers.letsencrypt-dns.acme.dnschallenge=true',
+                        '--certificatesresolvers.letsencrypt-dns.acme.storage=/traefik/acme-dns.json',
                     ],
                     'labels' => $labels,
                 ],
@@ -283,6 +286,54 @@ function generateDefaultProxyConfiguration(Server $server, array $custom_command
         } else {
             $config['services']['traefik']['command'][] = '--providers.docker=true';
             $config['services']['traefik']['command'][] = '--providers.docker.exposedbydefault=false';
+        }
+
+        // Configure wildcard SSL if enabled
+        if ($server->settings->is_wildcard_ssl_enabled && $server->settings->dns_provider) {
+            $dnsProvider = $server->settings->dns_provider;
+            $config['services']['traefik']['command'][] = "--certificatesresolvers.letsencrypt-dns.acme.dnschallenge.provider={$dnsProvider}";
+
+            if ($server->settings->acme_email) {
+                $config['services']['traefik']['command'][] = "--certificatesresolvers.letsencrypt-dns.acme.email={$server->settings->acme_email}";
+                $config['services']['traefik']['command'][] = "--certificatesresolvers.letsencrypt.acme.email={$server->settings->acme_email}";
+            }
+
+            // Add staging server for testing
+            if ($server->settings->use_staging_acme) {
+                $config['services']['traefik']['command'][] = '--certificatesresolvers.letsencrypt-dns.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory';
+            }
+
+            // Add DNS provider environment variables
+            $credentials = $server->settings->dns_provider_credentials ?? [];
+            if (!empty($credentials)) {
+                $config['services']['traefik']['environment'] = $config['services']['traefik']['environment'] ?? [];
+
+                // Provider-specific environment variables
+                switch ($dnsProvider) {
+                    case 'cloudflare':
+                        if (isset($credentials['api_token'])) {
+                            $config['services']['traefik']['environment'][] = "CF_API_TOKEN={$credentials['api_token']}";
+                        } elseif (isset($credentials['email']) && isset($credentials['api_key'])) {
+                            $config['services']['traefik']['environment'][] = "CF_API_EMAIL={$credentials['email']}";
+                            $config['services']['traefik']['environment'][] = "CF_API_KEY={$credentials['api_key']}";
+                        }
+                        break;
+                    case 'route53':
+                        if (isset($credentials['access_key_id']) && isset($credentials['secret_access_key'])) {
+                            $config['services']['traefik']['environment'][] = "AWS_ACCESS_KEY_ID={$credentials['access_key_id']}";
+                            $config['services']['traefik']['environment'][] = "AWS_SECRET_ACCESS_KEY={$credentials['secret_access_key']}";
+                            if (isset($credentials['region'])) {
+                                $config['services']['traefik']['environment'][] = "AWS_REGION={$credentials['region']}";
+                            }
+                        }
+                        break;
+                    case 'digitalocean':
+                        if (isset($credentials['auth_token'])) {
+                            $config['services']['traefik']['environment'][] = "DO_AUTH_TOKEN={$credentials['auth_token']}";
+                        }
+                        break;
+                }
+            }
         }
 
         // Append custom commands (e.g., trustedIPs for Cloudflare)
