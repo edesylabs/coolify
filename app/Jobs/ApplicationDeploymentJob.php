@@ -3027,6 +3027,13 @@ COPY ./nginx.conf /etc/nginx/conf.d/default.conf");
 
     private function start_by_compose_file()
     {
+        // Handle Kubernetes deployment
+        if ($this->server->isKubernetes()) {
+            $this->deploy_to_kubernetes();
+            return;
+        }
+
+        // Handle Docker Compose (standalone/swarm)
         if ($this->application->build_pack === 'dockerimage') {
             $this->application_deployment_queue->addLogEntry('Pulling latest images from the registry.');
             $this->execute_remote_command(
@@ -3045,6 +3052,39 @@ COPY ./nginx.conf /etc/nginx/conf.d/default.conf");
             }
         }
         $this->application_deployment_queue->addLogEntry('New container started.');
+    }
+
+    private function deploy_to_kubernetes()
+    {
+        try {
+            $this->application_deployment_queue->addLogEntry('Starting Kubernetes deployment...');
+
+            $orchestrator = \App\Services\Orchestrator\OrchestratorFactory::make($this->application);
+
+            // Deploy using the orchestrator
+            $result = $orchestrator->deploy($this->application, $this->production_image_name);
+
+            if ($result) {
+                $this->application_deployment_queue->addLogEntry('Kubernetes resources created successfully.');
+
+                // Wait for deployment to be ready
+                $this->application_deployment_queue->addLogEntry('Waiting for deployment to be ready...');
+                $namespace = data_get($this->server->settings, 'kubernetes_namespace', 'default');
+                $deploymentName = $this->application->uuid;
+
+                $this->execute_remote_command([
+                    "kubectl rollout status deployment/{$deploymentName} -n {$namespace} --timeout=300s",
+                    'hidden' => false,
+                ]);
+
+                $this->application_deployment_queue->addLogEntry('Deployment ready.');
+            } else {
+                throw new \Exception('Kubernetes deployment failed.');
+            }
+        } catch (\Throwable $e) {
+            $this->application_deployment_queue->addLogEntry('Kubernetes deployment failed: ' . $e->getMessage());
+            throw $e;
+        }
     }
 
     private function analyzeBuildTimeVariables($variables)

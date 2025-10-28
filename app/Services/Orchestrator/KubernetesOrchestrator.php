@@ -12,6 +12,18 @@ class KubernetesOrchestrator implements OrchestratorInterface
         $namespace = data_get($application->destination->server->settings, 'kubernetes_namespace', 'default');
 
         try {
+            // Generate Kubernetes Secret for environment variables
+            $secret = $this->generateSecretManifest($application);
+            if ($secret) {
+                $this->applyManifest($server, $namespace, $secret, 'secret');
+            }
+
+            // Generate PersistentVolumeClaims for storage
+            $pvcs = $this->generatePersistentVolumeClaimManifests($application);
+            foreach ($pvcs as $i => $pvc) {
+                $this->applyManifest($server, $namespace, $pvc, "pvc-{$i}");
+            }
+
             // Generate Kubernetes manifests
             $deployment = $this->generateDeploymentManifest($application, $image);
             $service = $this->generateServiceManifest($application);
@@ -263,8 +275,8 @@ class KubernetesOrchestrator implements OrchestratorInterface
         $name = $this->getResourceName($application);
         $replicas = data_get($application, 'kubernetes_replicas', 1);
 
-        // Parse environment variables
-        $envVars = $this->parseEnvironmentVariables($application);
+        // Use envFrom to reference Secret instead of inline env vars
+        $useSecrets = true; // Can be made configurable later
 
         // Parse node selector
         $nodeSelector = [];
@@ -329,9 +341,27 @@ class KubernetesOrchestrator implements OrchestratorInterface
             ],
         ];
 
-        // Add environment variables
-        if (!empty($envVars)) {
-            $deployment['spec']['template']['spec']['containers'][0]['env'] = $envVars;
+        // Add environment variables from Secret
+        if ($useSecrets) {
+            $deployment['spec']['template']['spec']['containers'][0]['envFrom'] = [
+                [
+                    'secretRef' => [
+                        'name' => "{$name}-env",
+                    ],
+                ],
+            ];
+        }
+
+        // Add volume mounts for persistent storage
+        $volumeMounts = $this->generateVolumeMounts($application);
+        if (!empty($volumeMounts)) {
+            $deployment['spec']['template']['spec']['containers'][0]['volumeMounts'] = $volumeMounts;
+        }
+
+        // Add volumes
+        $volumes = $this->generateVolumes($application);
+        if (!empty($volumes)) {
+            $deployment['spec']['template']['spec']['volumes'] = $volumes;
         }
 
         // Add ports
@@ -631,5 +661,132 @@ class KubernetesOrchestrator implements OrchestratorInterface
         } catch (\Throwable $e) {
             return false;
         }
+    }
+
+    /**
+     * Generate Kubernetes Secret manifest for environment variables
+     */
+    private function generateSecretManifest(Application $application): ?array
+    {
+        $name = $this->getResourceName($application);
+        $environmentVariables = $application->environment_variables ?? collect();
+
+        $secretData = [];
+        foreach ($environmentVariables as $env) {
+            if ($env->is_build_time) {
+                continue;
+            }
+            // Base64 encode the value for Kubernetes Secret
+            $secretData[$env->key] = base64_encode($env->value);
+        }
+
+        if (empty($secretData)) {
+            return null;
+        }
+
+        return [
+            'apiVersion' => 'v1',
+            'kind' => 'Secret',
+            'metadata' => [
+                'name' => "{$name}-env",
+                'labels' => [
+                    'app' => $name,
+                    'coolify.managed' => 'true',
+                ],
+            ],
+            'type' => 'Opaque',
+            'data' => $secretData,
+        ];
+    }
+
+    /**
+     * Generate PersistentVolumeClaim manifests for storage
+     */
+    private function generatePersistentVolumeClaimManifests(Application $application): array
+    {
+        $name = $this->getResourceName($application);
+        $storages = $application->persistentStorages()->get();
+        $storageClass = data_get($application->destination->server->settings, 'kubernetes_storage_class');
+
+        $pvcs = [];
+
+        foreach ($storages as $storage) {
+            $pvcName = "{$name}-{$storage->name}";
+            $size = $storage->size ?? '1Gi'; // Default to 1Gi if not specified
+
+            $pvc = [
+                'apiVersion' => 'v1',
+                'kind' => 'PersistentVolumeClaim',
+                'metadata' => [
+                    'name' => $pvcName,
+                    'labels' => [
+                        'app' => $name,
+                        'coolify.managed' => 'true',
+                    ],
+                ],
+                'spec' => [
+                    'accessModes' => ['ReadWriteOnce'],
+                    'resources' => [
+                        'requests' => [
+                            'storage' => $size,
+                        ],
+                    ],
+                ],
+            ];
+
+            if ($storageClass) {
+                $pvc['spec']['storageClassName'] = $storageClass;
+            }
+
+            $pvcs[] = $pvc;
+        }
+
+        return $pvcs;
+    }
+
+    /**
+     * Generate volume mounts for containers
+     */
+    private function generateVolumeMounts(Application $application): array
+    {
+        $name = $this->getResourceName($application);
+        $storages = $application->persistentStorages()->get();
+
+        $volumeMounts = [];
+
+        foreach ($storages as $storage) {
+            $pvcName = "{$name}-{$storage->name}";
+
+            $volumeMounts[] = [
+                'name' => $storage->name,
+                'mountPath' => $storage->mount_path,
+            ];
+        }
+
+        return $volumeMounts;
+    }
+
+    /**
+     * Generate volumes for pod spec
+     */
+    private function generateVolumes(Application $application): array
+    {
+        $name = $this->getResourceName($application);
+        $storages = $application->persistentStorages()->get();
+
+        $volumes = [];
+
+        foreach ($storages as $storage) {
+            $pvcName = "{$name}-{$storage->name}";
+
+            $volumes[] = [
+                'name' => $storage->name,
+                'persistentVolumeClaim' => [
+                    'claimName' => $pvcName,
+                ],
+            ];
+        }
+
+        return $volumes;
     }
 }
