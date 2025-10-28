@@ -49,6 +49,7 @@ use App\Livewire\Server\Destinations as ServerDestinations;
 use App\Livewire\Server\DockerCleanup;
 use App\Livewire\Server\Index as ServerIndex;
 use App\Livewire\Server\LogDrains;
+use App\Livewire\Server\Orchestrator;
 use App\Livewire\Server\PrivateKey\Show as PrivateKeyShow;
 use App\Livewire\Server\Proxy\DynamicConfigurations as ProxyDynamicConfigurations;
 use App\Livewire\Server\Proxy\Logs as ProxyLogs;
@@ -190,6 +191,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::prefix('project/{project_uuid}/environment/{environment_uuid}/application/{application_uuid}')->group(function () {
         Route::get('/', ApplicationConfiguration::class)->name('project.application.configuration');
         Route::get('/swarm', ApplicationConfiguration::class)->name('project.application.swarm');
+        Route::get('/kubernetes', ApplicationConfiguration::class)->name('project.application.kubernetes');
         Route::get('/advanced', ApplicationConfiguration::class)->name('project.application.advanced');
         Route::get('/environment-variables', ApplicationConfiguration::class)->name('project.application.environment-variables');
         Route::get('/persistent-storage', ApplicationConfiguration::class)->name('project.application.persistent-storage');
@@ -251,6 +253,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::prefix('server/{server_uuid}')->group(function () {
         Route::get('/', ServerShow::class)->name('server.show');
         Route::get('/advanced', ServerAdvanced::class)->name('server.advanced');
+        Route::get('/orchestrator', Orchestrator::class)->name('server.orchestrator');
         Route::get('/private-key', PrivateKeyShow::class)->name('server.private-key');
         Route::get('/cloud-provider-token', CloudProviderTokenShow::class)->name('server.cloud-provider-token');
         Route::get('/ca-certificate', CaCertificateShow::class)->name('server.ca-certificate');

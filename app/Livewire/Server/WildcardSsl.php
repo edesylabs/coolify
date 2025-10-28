@@ -4,6 +4,7 @@ namespace App\Livewire\Server;
 
 use App\Models\Server;
 use App\Services\DnsProviders\CloudflareProvider;
+use App\Services\DnsProviders\DnsProviderFactory;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Component;
 
@@ -125,17 +126,15 @@ class WildcardSsl extends Component
 
             $credentials = $this->getCredentialsArray();
 
-            if ($this->dnsProvider === 'cloudflare') {
-                $provider = new CloudflareProvider($credentials);
-                if ($provider->validateCredentials($credentials)) {
-                    $this->testStatus = 'success';
-                    $this->dispatch('success', 'Cloudflare credentials validated successfully!');
-                } else {
-                    $this->testStatus = 'error';
-                    $this->dispatch('error', 'Failed to validate Cloudflare credentials. Please check your API token/key.');
-                }
+            // Use factory to create and validate provider
+            $result = DnsProviderFactory::validateProviderCredentials($this->dnsProvider, $credentials);
+
+            if ($result['valid']) {
+                $this->testStatus = 'success';
+                $this->dispatch('success', $result['message']);
             } else {
-                $this->dispatch('info', 'Connection test not yet implemented for '.$this->dnsProvider);
+                $this->testStatus = 'error';
+                $this->dispatch('error', $result['message']);
             }
         } catch (\Throwable $e) {
             $this->testStatus = 'error';
