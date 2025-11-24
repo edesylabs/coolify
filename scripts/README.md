@@ -20,7 +20,7 @@ Handles everything:
 **Usage:**
 ```bash
 # Download
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 
 # Run
 chmod +x coolify.sh
@@ -47,7 +47,7 @@ Creates a complete backup for migrating to a new server.
 
 **Usage on OLD server:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/backup-for-migration.sh -o backup.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/backup-for-migration.sh -o backup.sh
 chmod +x backup.sh
 ./backup.sh
 ```
@@ -65,7 +65,7 @@ Restores backup on a new server.
 **Usage on NEW server:**
 ```bash
 # 1. First install custom Coolify
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh  # Select "Install Custom Coolify"
 
@@ -73,7 +73,7 @@ sudo ./coolify.sh  # Select "Install Custom Coolify"
 scp root@OLD_SERVER:/root/coolify-migration-*.tar.gz /root/
 
 # 3. Restore
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/restore-from-migration.sh -o restore.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/restore-from-migration.sh -o restore.sh
 chmod +x restore.sh
 ./restore.sh
 ```
@@ -118,7 +118,7 @@ chmod +x restore.sh
 
 ```bash
 # On your Coolify server
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh
 ```

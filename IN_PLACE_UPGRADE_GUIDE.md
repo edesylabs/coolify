@@ -31,7 +31,7 @@ This guide shows you how to upgrade your existing Coolify installation to use yo
 
 ```bash
 # 1. Download and run unified script
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh
 
@@ -72,7 +72,7 @@ The unified `coolify-custom.sh` script handles all the steps automatically with 
 
 ```bash
 # Download
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 
 # Run

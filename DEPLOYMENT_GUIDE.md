@@ -133,7 +133,7 @@ Replace `ghcr.io` with `docker.io` and use Docker Hub credentials.
 
 The scripts are now configured to use:
 ```bash
-https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/install.sh
+https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/install.sh
 ```
 
 **Required files in your repository:**
@@ -162,15 +162,15 @@ If you want to use a custom CDN (Cloudflare R2, AWS S3, etc.):
 
 ```bash
 # Option 1: Using environment variable
-export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/main"
+export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main"
 export COOLIFY_REGISTRY="ghcr.io"
 export REGISTRY_URL="ghcr.io"
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/install.sh | bash
 
 # Option 2: Download and run
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/install.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/install.sh
 chmod +x install.sh
-COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/main" \
+COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main" \
 REGISTRY_URL="ghcr.io" \
 ./install.sh
 ```
@@ -189,7 +189,7 @@ HELPER_IMAGE=ghcr.io/edesylabs/coolify-helper
 REALTIME_IMAGE=ghcr.io/edesylabs/coolify-realtime
 
 # CDN Configuration (optional)
-COOLIFY_CDN=https://raw.githubusercontent.com/edesylabs/coolify/main
+COOLIFY_CDN=https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main
 
 # Other settings...
 APP_ID=<your-app-id>
@@ -215,7 +215,7 @@ If you need to manually prepare a server:
 ssh user@target-server
 
 # Install using your custom script
-export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/main"
+export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main"
 export REGISTRY_URL="ghcr.io"
 curl -fsSL $COOLIFY_CDN/scripts/install.sh | bash
 ```
@@ -231,7 +231,7 @@ Your custom Coolify will check for updates from your configured sources:
 1. Edit `/data/coolify/source/.env`:
 ```bash
 AUTOUPDATE=true
-COOLIFY_RELEASES_URL=https://raw.githubusercontent.com/edesylabs/coolify/main/versions.json
+COOLIFY_RELEASES_URL=https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/versions.json
 ```
 
 2. Create `versions.json` in your repository root:
@@ -253,7 +253,7 @@ COOLIFY_RELEASES_URL=https://raw.githubusercontent.com/edesylabs/coolify/main/ve
 ```bash
 # On your Coolify server
 cd /data/coolify/source
-export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/main"
+export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main"
 ./upgrade.sh latest latest ghcr.io
 ```
 

@@ -28,7 +28,7 @@ Quick comparison of the two migration approaches to help you choose the right on
 ### Commands
 ```bash
 # Download and run unified script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh
 chmod +x coolify-custom.sh
 sudo ./coolify-custom.sh
 # Select "Upgrade to Custom Coolify (In-Place)"
@@ -74,7 +74,7 @@ sudo ./coolify-custom.sh
 
 **On OLD server:**
 ```bash
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/backup-for-migration.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/backup-for-migration.sh
 chmod +x backup-for-migration.sh
 ./backup-for-migration.sh
 scp /root/coolify-migration-*.tar.gz root@NEW_SERVER:/root/
@@ -83,12 +83,12 @@ scp /root/coolify-migration-*.tar.gz root@NEW_SERVER:/root/
 **On NEW server:**
 ```bash
 # Install custom Coolify
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh  # Select "Install Custom Coolify"
 
 # Restore data
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/restore-from-migration.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/restore-from-migration.sh
 chmod +x restore-from-migration.sh
 ./restore-from-migration.sh
 ```
@@ -292,7 +292,7 @@ You're confident in your custom images and want quick results.
 
 ```bash
 # One command upgrade with unified script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh
 chmod +x coolify-custom.sh
 sudo ./coolify-custom.sh
 # Select "Upgrade to Custom Coolify (In-Place)"

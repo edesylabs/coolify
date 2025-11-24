@@ -14,7 +14,7 @@ ssh root@your-coolify-server-ip
 
 ```bash
 # Download the all-in-one script directly from your GitHub repository
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 
 # Make it executable
 chmod +x coolify.sh
@@ -43,7 +43,7 @@ If you trust the script and want to run it immediately:
 ssh root@your-server-ip
 
 # Download and run unified script
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh && chmod +x coolify.sh && sudo ./coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh && chmod +x coolify.sh && sudo ./coolify.sh
 ```
 
 **Note:** The script auto-detects your scenario and shows an interactive menu. All safety checks are built-in.
@@ -59,7 +59,7 @@ If you want to review the script before running:
 ssh root@your-server-ip
 
 # 2. Download the script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh
 
 # 3. Review the script
 cat coolify-custom.sh
@@ -175,7 +175,7 @@ Here's everything in one copy-paste block:
 ssh root@your-coolify-server-ip
 
 # 2. Download the unified script
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 
 # 3. Make it executable
 chmod +x coolify.sh
@@ -188,7 +188,7 @@ sudo ./coolify.sh
 
 ```bash
 # SSH and run in one go
-ssh root@your-coolify-server-ip "curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh && chmod +x coolify.sh && sudo ./coolify.sh"
+ssh root@your-coolify-server-ip "curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh && chmod +x coolify.sh && sudo ./coolify.sh"
 ```
 
 ---
@@ -205,7 +205,7 @@ For the `curl` commands to work, make sure:
 **To check if your script is accessible:**
 ```bash
 # Test from your local machine
-curl -I https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh
+curl -I https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh
 
 # Should return: HTTP/2 200
 # If returns 404, the file isn't accessible
@@ -242,7 +242,7 @@ curl -fsSL https://your-domain.com/scripts/coolify-custom.sh -o coolify.sh
 apt-get update && apt-get install -y curl
 
 # Or use wget instead
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -O coolify.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -O coolify.sh
 ```
 
 ### Problem: "404 Not Found" when downloading
@@ -326,7 +326,7 @@ When you download the unified script, you get:
 **Recommended Approach:**
 ```bash
 # On your Coolify server
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh
 ```

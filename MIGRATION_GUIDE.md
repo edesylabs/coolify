@@ -142,7 +142,7 @@ On your **NEW Coolify server** (Server E):
 
 ```bash
 # Install your custom Coolify
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh
 ```

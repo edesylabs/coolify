@@ -113,7 +113,7 @@ docker push ghcr.io/edesylabs/coolify-realtime:latest
 
 ```bash
 # On your server (as root)
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh
 ```
@@ -124,7 +124,7 @@ The script will auto-detect that Coolify is not installed and offer to install i
 
 ```bash
 # Download the script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh
 
 # Review it (optional but recommended)
 less coolify-custom.sh
@@ -150,7 +150,7 @@ Add these lines (or verify they exist):
 # Custom deployment settings
 REGISTRY_URL=ghcr.io
 COOLIFY_IMAGE_NAMESPACE=edesylabs
-COOLIFY_CDN=https://raw.githubusercontent.com/edesylabs/coolify/main
+COOLIFY_CDN=https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main
 ```
 
 Restart Coolify to apply changes:

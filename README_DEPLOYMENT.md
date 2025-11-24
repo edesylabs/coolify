@@ -23,7 +23,7 @@ See [QUICK_START.md](./QUICK_START.md) for building and publishing images to Git
 
 ```bash
 # Download and run the all-in-one script
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh
 ```
@@ -74,7 +74,7 @@ docker ps | grep coolify
 
 ```bash
 # All-in-one script for install, upgrade, rollback, and more
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh
 ```
@@ -88,17 +88,17 @@ sudo ./coolify.sh
 
 ```bash
 # On OLD server - create backup
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/backup-for-migration.sh -o backup.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/backup-for-migration.sh -o backup.sh
 chmod +x backup.sh
 ./backup.sh
 
 # On NEW server - install custom Coolify
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh  # Select "Install Custom Coolify"
 
 # On NEW server - restore backup
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/restore-from-migration.sh -o restore.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/restore-from-migration.sh -o restore.sh
 chmod +x restore.sh
 ./restore.sh
 ```
@@ -114,7 +114,7 @@ chmod +x restore.sh
 ssh root@your-server-ip
 
 # Download and run unified script
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh && chmod +x coolify.sh && sudo ./coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh && chmod +x coolify.sh && sudo ./coolify.sh
 ```
 
 ### Check Status After Upgrade
@@ -148,7 +148,7 @@ HELPER_IMAGE=ghcr.io/edesylabs/coolify-helper
 REALTIME_IMAGE=ghcr.io/edesylabs/coolify-realtime
 
 # Optional: Custom CDN for updates
-COOLIFY_CDN=https://raw.githubusercontent.com/edesylabs/coolify/main
+COOLIFY_CDN=https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main
 ```
 
 ---

@@ -19,7 +19,7 @@ Quick commands for migrating from official Coolify to your custom fork.
 
 ```bash
 # Download and run backup script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/backup-for-migration.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/backup-for-migration.sh
 chmod +x backup-for-migration.sh
 ./backup-for-migration.sh
 
@@ -35,7 +35,7 @@ scp /root/coolify-migration-*.tar.gz root@NEW_SERVER_IP:/root/
 
 ```bash
 # Install custom Coolify using unified script
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/coolify-custom.sh -o coolify.sh
 chmod +x coolify.sh
 sudo ./coolify.sh  # Select "Install Custom Coolify" from menu
 ```
@@ -48,7 +48,7 @@ sudo ./coolify.sh  # Select "Install Custom Coolify" from menu
 
 ```bash
 # Download and run restore script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/restore-from-migration.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/restore-from-migration.sh
 chmod +x restore-from-migration.sh
 ./restore-from-migration.sh
 ```
