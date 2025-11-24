@@ -18,6 +18,8 @@ class SslCertificate extends Model
         'subject_alternative_names',
         'valid_until',
         'is_ca_certificate',
+        'is_wildcard',
+        'dns_provider',
     ];
 
     protected $casts = [

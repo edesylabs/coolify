@@ -61,6 +61,11 @@ class ServerSetting extends Model
         'is_reachable' => 'boolean',
         'is_usable' => 'boolean',
         'is_terminal_enabled' => 'boolean',
+        'is_wildcard_ssl_enabled' => 'boolean',
+        'dns_provider_credentials' => 'encrypted:array',
+        'use_staging_acme' => 'boolean',
+        'webhook_secret' => 'encrypted',
+        'webhook_enabled' => 'boolean',
     ];
 
     protected static function booted()

@@ -5,6 +5,9 @@
         <a class="menu-item {{ $activeMenu === 'advanced' ? 'menu-item-active' : '' }}"
             href="{{ route('server.advanced', ['server_uuid' => $server->uuid]) }}">Advanced
         </a>
+        <a class="menu-item {{ $activeMenu === 'wildcard-ssl' ? 'menu-item-active' : '' }}"
+            href="{{ route('server.wildcard-ssl', ['server_uuid' => $server->uuid]) }}">Wildcard SSL
+        </a>
     @endif
     <a class="menu-item {{ $activeMenu === 'private-key' ? 'menu-item-active' : '' }}"
         href="{{ route('server.private-key', ['server_uuid' => $server->uuid]) }}">Private Key

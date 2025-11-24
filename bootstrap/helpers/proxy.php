@@ -250,6 +250,9 @@ function generateDefaultProxyConfiguration(Server $server, array $custom_command
                         '--certificatesresolvers.letsencrypt.acme.httpchallenge=true',
                         '--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=http',
                         '--certificatesresolvers.letsencrypt.acme.storage=/traefik/acme.json',
+                        // DNS-01 challenge resolver for wildcard certificates
+                        '--certificatesresolvers.letsencrypt-dns.acme.dnschallenge=true',
+                        '--certificatesresolvers.letsencrypt-dns.acme.storage=/traefik/acme-dns.json',
                     ],
                     'labels' => $labels,
                 ],
@@ -283,6 +286,54 @@ function generateDefaultProxyConfiguration(Server $server, array $custom_command
         } else {
             $config['services']['traefik']['command'][] = '--providers.docker=true';
             $config['services']['traefik']['command'][] = '--providers.docker.exposedbydefault=false';
+        }
+
+        // Configure wildcard SSL if enabled
+        if ($server->settings->is_wildcard_ssl_enabled && $server->settings->dns_provider) {
+            $dnsProvider = $server->settings->dns_provider;
+            $config['services']['traefik']['command'][] = "--certificatesresolvers.letsencrypt-dns.acme.dnschallenge.provider={$dnsProvider}";
+
+            if ($server->settings->acme_email) {
+                $config['services']['traefik']['command'][] = "--certificatesresolvers.letsencrypt-dns.acme.email={$server->settings->acme_email}";
+                $config['services']['traefik']['command'][] = "--certificatesresolvers.letsencrypt.acme.email={$server->settings->acme_email}";
+            }
+
+            // Add staging server for testing
+            if ($server->settings->use_staging_acme) {
+                $config['services']['traefik']['command'][] = '--certificatesresolvers.letsencrypt-dns.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory';
+            }
+
+            // Add DNS provider environment variables
+            $credentials = $server->settings->dns_provider_credentials ?? [];
+            if (!empty($credentials)) {
+                $config['services']['traefik']['environment'] = $config['services']['traefik']['environment'] ?? [];
+
+                // Provider-specific environment variables
+                switch ($dnsProvider) {
+                    case 'cloudflare':
+                        if (isset($credentials['api_token'])) {
+                            $config['services']['traefik']['environment'][] = "CF_API_TOKEN={$credentials['api_token']}";
+                        } elseif (isset($credentials['email']) && isset($credentials['api_key'])) {
+                            $config['services']['traefik']['environment'][] = "CF_API_EMAIL={$credentials['email']}";
+                            $config['services']['traefik']['environment'][] = "CF_API_KEY={$credentials['api_key']}";
+                        }
+                        break;
+                    case 'route53':
+                        if (isset($credentials['access_key_id']) && isset($credentials['secret_access_key'])) {
+                            $config['services']['traefik']['environment'][] = "AWS_ACCESS_KEY_ID={$credentials['access_key_id']}";
+                            $config['services']['traefik']['environment'][] = "AWS_SECRET_ACCESS_KEY={$credentials['secret_access_key']}";
+                            if (isset($credentials['region'])) {
+                                $config['services']['traefik']['environment'][] = "AWS_REGION={$credentials['region']}";
+                            }
+                        }
+                        break;
+                    case 'digitalocean':
+                        if (isset($credentials['auth_token'])) {
+                            $config['services']['traefik']['environment'][] = "DO_AUTH_TOKEN={$credentials['auth_token']}";
+                        }
+                        break;
+                }
+            }
         }
 
         // Append custom commands (e.g., trustedIPs for Cloudflare)
@@ -333,4 +384,144 @@ function generateDefaultProxyConfiguration(Server $server, array $custom_command
     SaveProxyConfiguration::run($server, $config);
 
     return $config;
+}
+
+/**
+ * Write Traefik dynamic configuration file for an application's domains
+ * This enables zero-downtime domain additions for multi-tenant applications
+ *
+ * @param  Application  $application  The application instance
+ */
+function writeDynamicConfigurationForApplication(Application $application): void
+{
+    $server = $application->destination->server;
+    $proxy_path = $server->proxyPath();
+    $proxy_type = $server->proxyType();
+
+    // Only works with Traefik
+    if ($proxy_type !== ProxyTypes::TRAEFIK->value) {
+        return;
+    }
+
+    // Get domains from application
+    $domains = str($application->fqdn)->explode(',')->filter(fn ($domain) => ! empty(trim($domain)));
+
+    if ($domains->isEmpty()) {
+        // No domains, remove the config file if it exists
+        removeDynamicConfigurationForApplication($application);
+
+        return;
+    }
+
+    // Generate container name (use consistent name if enabled, otherwise use UUID)
+    $containerName = $application->settings->is_consistent_container_name_enabled
+        ? $application->uuid
+        : $application->uuid;
+
+    // Get port
+    $ports = $application->settings->is_static ? [80] : $application->ports_exposes_array;
+    $port = count($ports) > 0 ? $ports[0] : 80;
+
+    // Build Traefik configuration
+    $config = [
+        'http' => [
+            'routers' => [],
+            'services' => [
+                "app-{$application->uuid}" => [
+                    'loadBalancer' => [
+                        'servers' => [
+                            ['url' => "http://{$containerName}:{$port}"],
+                        ],
+                    ],
+                ],
+            ],
+            'middlewares' => [],
+        ],
+    ];
+
+    // Add gzip middleware if enabled
+    if ($application->isGzipEnabled()) {
+        $config['http']['middlewares']['gzip-'.$application->uuid] = [
+            'compress' => true,
+        ];
+    }
+
+    // Process each domain
+    foreach ($domains as $index => $domain) {
+        $domain = trim($domain);
+        $url = \Spatie\Url\Url::fromString($domain);
+        $host = $url->getHost();
+        $path = $url->getPath() ?: '/';
+        $schema = $url->getScheme();
+
+        $routerName = "http-{$index}-{$application->uuid}";
+        $httpsRouterName = "https-{$index}-{$application->uuid}";
+
+        // HTTP router
+        $router = [
+            'rule' => "Host(`{$host}`) && PathPrefix(`{$path}`)",
+            'service' => "app-{$application->uuid}",
+            'entryPoints' => ['http'],
+        ];
+
+        // Add middlewares
+        $middlewares = [];
+        if ($application->isGzipEnabled()) {
+            $middlewares[] = 'gzip-'.$application->uuid;
+        }
+
+        if (! empty($middlewares)) {
+            $router['middlewares'] = $middlewares;
+        }
+
+        $config['http']['routers'][$routerName] = $router;
+
+        // HTTPS router if schema is https
+        if ($schema === 'https') {
+            $httpsRouter = $router;
+            $httpsRouter['entryPoints'] = ['https'];
+            $httpsRouter['tls'] = [
+                'certResolver' => 'letsencrypt',
+            ];
+
+            $config['http']['routers'][$httpsRouterName] = $httpsRouter;
+
+            // Add redirect middleware for http->https if force https is enabled
+            if ($application->isForceHttpsEnabled()) {
+                $config['http']['routers'][$routerName]['middlewares'][] = 'redirect-to-https';
+            }
+        }
+    }
+
+    // Convert to YAML
+    $yaml = Yaml::dump($config, 10, 2);
+
+    // Add header comment
+    $yaml = "# This file is generated by Coolify for application: {$application->name}\n# UUID: {$application->uuid}\n# Last updated: ".now()->toDateTimeString()."\n\n".$yaml;
+
+    // Write to file on server
+    $filename = "app-{$application->uuid}.yaml";
+    $encoded = base64_encode($yaml);
+
+    instant_remote_process([
+        "mkdir -p {$proxy_path}/dynamic",
+        "echo '{$encoded}' | base64 -d > {$proxy_path}/dynamic/{$filename}",
+        "chmod 644 {$proxy_path}/dynamic/{$filename}",
+    ], $server);
+}
+
+/**
+ * Remove dynamic configuration file for an application
+ *
+ * @param  Application  $application  The application instance
+ */
+function removeDynamicConfigurationForApplication(Application $application): void
+{
+    $server = $application->destination->server;
+    $proxy_path = $server->proxyPath();
+    $filename = "app-{$application->uuid}.yaml";
+
+    instant_remote_process([
+        "rm -f {$proxy_path}/dynamic/{$filename}",
+    ], $server, throwError: false);
 }

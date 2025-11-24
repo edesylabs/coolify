@@ -938,9 +938,13 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
         if ($this->use_build_server) {
             $forceFail = true;
         }
-        if ($this->server->isSwarm() && $this->build_pack !== 'dockerimage') {
+
+        // Check if orchestrator requires registry
+        $orchestrator = \App\Services\Orchestrator\OrchestratorFactory::make($this->application);
+        if ($orchestrator->requiresRegistry() && $this->build_pack !== 'dockerimage') {
             $forceFail = true;
         }
+
         if ($this->application->additional_servers->count() > 0) {
             $forceFail = true;
         }
@@ -1611,14 +1615,18 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
     private function rolling_update()
     {
         $this->checkForCancellation();
+        $orchestrator = \App\Services\Orchestrator\OrchestratorFactory::make($this->application);
+
         if ($this->server->isSwarm()) {
             $this->application_deployment_queue->addLogEntry('Rolling update started.');
-            $this->execute_remote_command(
-                [
-                    executeInDocker($this->deployment_uuid, "docker stack deploy --detach=true --with-registry-auth -c {$this->workdir}{$this->docker_compose_location} {$this->application->uuid}"),
-                ],
-            );
-            $this->application_deployment_queue->addLogEntry('Rolling update completed.');
+            try {
+                $composePath = "{$this->workdir}{$this->docker_compose_location}";
+                $orchestrator->performRollingUpdate($this->application, $composePath);
+                $this->application_deployment_queue->addLogEntry('Rolling update completed.');
+            } catch (\Throwable $e) {
+                $this->application_deployment_queue->addLogEntry("Rolling update failed: " . $e->getMessage());
+                throw $e;
+            }
         } else {
             if ($this->use_build_server) {
                 $this->write_deployment_configurations();
@@ -1657,8 +1665,22 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
 
     private function health_check()
     {
+        $orchestrator = \App\Services\Orchestrator\OrchestratorFactory::make($this->application);
+
         if ($this->server->isSwarm()) {
-            // Implement healthcheck for swarm
+            // Use orchestrator health check for Swarm
+            $this->application_deployment_queue->addLogEntry('Checking service health...');
+            try {
+                $isHealthy = $orchestrator->performHealthCheck($this->application);
+                if ($isHealthy) {
+                    $this->newVersionIsHealthy = true;
+                    $this->application_deployment_queue->addLogEntry('Service is healthy.');
+                } else {
+                    $this->application_deployment_queue->addLogEntry('Service health check failed.');
+                }
+            } catch (\Throwable $e) {
+                $this->application_deployment_queue->addLogEntry("Health check error: " . $e->getMessage());
+            }
         } else {
             if ($this->application->isHealthcheckDisabled() && $this->application->custom_healthcheck_found === false) {
                 $this->newVersionIsHealthy = true;
@@ -1873,8 +1895,12 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
             return;
         }
         $destination_ids = $this->application->additional_networks->pluck('id');
-        if ($this->server->isSwarm()) {
-            $this->application_deployment_queue->addLogEntry('Additional destinations are not supported in swarm mode.');
+
+        // Check if orchestrator supports additional destinations
+        $orchestrator = \App\Services\Orchestrator\OrchestratorFactory::make($this->application);
+        if (!$orchestrator->supportsAdditionalDestinations()) {
+            $orchestratorType = $orchestrator->getType();
+            $this->application_deployment_queue->addLogEntry("Additional destinations are not supported in {$orchestratorType} mode.");
 
             return;
         }
@@ -2321,26 +2347,35 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
         $persistent_storages = $this->generate_local_persistent_volumes();
         $persistent_file_volumes = $this->application->fileStorages()->get();
         $volume_names = $this->generate_local_persistent_volumes_only_volume_names();
-        if (data_get($this->application, 'custom_labels')) {
-            $this->application->parseContainerLabels();
-            $labels = collect(preg_split("/\r\n|\n|\r/", base64_decode($this->application->custom_labels)));
-            $labels = $labels->filter(function ($value, $key) {
-                return ! Str::startsWith($value, 'coolify.');
-            });
-            $this->application->custom_labels = base64_encode($labels->implode("\n"));
-            $this->application->save();
+        // If dynamic domain management is enabled, skip domain routing labels
+        // The routing will be handled by Traefik file provider instead
+        if ($this->application->settings->is_dynamic_domain_enabled && $this->pull_request_id === 0) {
+            $labels = collect([]);
+            // Write dynamic configuration file for domain routing
+            writeDynamicConfigurationForApplication($this->application);
+            $this->application_deployment_queue->addLogEntry('Using dynamic domain management - routing configured via file provider');
         } else {
-            if ($this->application->settings->is_container_label_readonly_enabled) {
+            if (data_get($this->application, 'custom_labels')) {
+                $this->application->parseContainerLabels();
+                $labels = collect(preg_split("/\r\n|\n|\r/", base64_decode($this->application->custom_labels)));
+                $labels = $labels->filter(function ($value, $key) {
+                    return ! Str::startsWith($value, 'coolify.');
+                });
+                $this->application->custom_labels = base64_encode($labels->implode("\n"));
+                $this->application->save();
+            } else {
+                if ($this->application->settings->is_container_label_readonly_enabled) {
+                    $labels = collect(generateLabelsApplication($this->application, $this->preview));
+                }
+            }
+            if ($this->pull_request_id !== 0) {
                 $labels = collect(generateLabelsApplication($this->application, $this->preview));
             }
-        }
-        if ($this->pull_request_id !== 0) {
-            $labels = collect(generateLabelsApplication($this->application, $this->preview));
-        }
-        if ($this->application->settings->is_container_label_escape_enabled) {
-            $labels = $labels->map(function ($value, $key) {
-                return escapeDollarSign($value);
-            });
+            if ($this->application->settings->is_container_label_escape_enabled) {
+                $labels = $labels->map(function ($value, $key) {
+                    return escapeDollarSign($value);
+                });
+            }
         }
         $labels = $labels->merge(defaultLabels($this->application->id, $this->application->uuid, $this->application->project()->name, $this->application->name, $this->application->environment->name, $this->pull_request_id))->toArray();
 
@@ -2411,55 +2446,34 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
         if (! is_null($this->application->limits_cpuset)) {
             data_set($docker_compose, 'services.'.$this->container_name.'.cpuset', $this->application->limits_cpuset);
         }
+
+        // Add labels based on orchestrator type
         if ($this->server->isSwarm()) {
-            data_forget($docker_compose, 'services.'.$this->container_name.'.container_name');
-            data_forget($docker_compose, 'services.'.$this->container_name.'.expose');
-            data_forget($docker_compose, 'services.'.$this->container_name.'.restart');
+            // For Swarm, labels go in deploy section (handled by orchestrator)
+        } else {
+            $docker_compose['services'][$this->container_name]['labels'] = $labels;
+        }
 
-            data_forget($docker_compose, 'services.'.$this->container_name.'.mem_limit');
-            data_forget($docker_compose, 'services.'.$this->container_name.'.memswap_limit');
-            data_forget($docker_compose, 'services.'.$this->container_name.'.mem_swappiness');
-            data_forget($docker_compose, 'services.'.$this->container_name.'.mem_reservation');
-            data_forget($docker_compose, 'services.'.$this->container_name.'.cpus');
-            data_forget($docker_compose, 'services.'.$this->container_name.'.cpuset');
-            data_forget($docker_compose, 'services.'.$this->container_name.'.cpu_shares');
+        // Apply orchestrator-specific transformations
+        $orchestrator = \App\Services\Orchestrator\OrchestratorFactory::make($this->application);
+        $docker_compose = $orchestrator->transformComposeFile($docker_compose, $this->application);
 
-            $docker_compose['services'][$this->container_name]['deploy'] = [
-                'mode' => 'replicated',
-                'replicas' => data_get($this->application, 'swarm_replicas', 1),
-                'update_config' => [
-                    'order' => 'start-first',
-                ],
-                'rollback_config' => [
-                    'order' => 'start-first',
-                ],
-                'labels' => $labels,
-                'resources' => [
-                    'limits' => [
-                        'cpus' => $this->application->limits_cpus,
-                        'memory' => $this->application->limits_memory,
-                    ],
-                    'reservations' => [
-                        'cpus' => $this->application->limits_cpus,
-                        'memory' => $this->application->limits_memory,
-                    ],
-                ],
-            ];
-            if (data_get($this->application, 'swarm_placement_constraints')) {
-                $swarm_placement_constraints = Yaml::parse(base64_decode(data_get($this->application, 'swarm_placement_constraints')));
-                $docker_compose['services'][$this->container_name]['deploy'] = array_merge(
-                    $docker_compose['services'][$this->container_name]['deploy'],
-                    $swarm_placement_constraints
-                );
-            }
-            if (data_get($this->application, 'settings.is_swarm_only_worker_nodes')) {
-                $docker_compose['services'][$this->container_name]['deploy']['placement']['constraints'][] = 'node.role == worker';
-            }
+        // Add labels to Swarm deploy section if needed
+        if ($this->server->isSwarm() && isset($docker_compose['services'][$this->container_name]['deploy'])) {
+            $docker_compose['services'][$this->container_name]['deploy']['labels'] = $labels;
+
+            // Override replicas for preview deployments
             if ($this->pull_request_id !== 0) {
                 $docker_compose['services'][$this->container_name]['deploy']['replicas'] = 1;
             }
-        } else {
-            $docker_compose['services'][$this->container_name]['labels'] = $labels;
+
+            // Add worker-only placement constraint if enabled
+            if (data_get($this->application, 'settings.is_swarm_only_worker_nodes')) {
+                if (!isset($docker_compose['services'][$this->container_name]['deploy']['placement'])) {
+                    $docker_compose['services'][$this->container_name]['deploy']['placement'] = ['constraints' => []];
+                }
+                $docker_compose['services'][$this->container_name]['deploy']['placement']['constraints'][] = 'node.role == worker';
+            }
         }
         if ($this->server->isLogDrainEnabled() && $this->application->isLogDrainEnabled()) {
             $docker_compose['services'][$this->container_name]['logging'] = generate_fluentd_configuration();
@@ -3068,6 +3082,13 @@ COPY ./nginx.conf /etc/nginx/conf.d/default.conf");
             ["touch {$this->configuration_dir}/.env", 'hidden' => true],
         );
 
+        // Handle Kubernetes deployment
+        if ($this->server->isKubernetes()) {
+            $this->deploy_to_kubernetes();
+            return;
+        }
+
+        // Handle Docker Compose (standalone/swarm)
         if ($this->application->build_pack === 'dockerimage') {
             $this->application_deployment_queue->addLogEntry('Pulling latest images from the registry.');
             $this->execute_remote_command(
@@ -3086,6 +3107,39 @@ COPY ./nginx.conf /etc/nginx/conf.d/default.conf");
             }
         }
         $this->application_deployment_queue->addLogEntry('New container started.');
+    }
+
+    private function deploy_to_kubernetes()
+    {
+        try {
+            $this->application_deployment_queue->addLogEntry('Starting Kubernetes deployment...');
+
+            $orchestrator = \App\Services\Orchestrator\OrchestratorFactory::make($this->application);
+
+            // Deploy using the orchestrator
+            $result = $orchestrator->deploy($this->application, $this->production_image_name);
+
+            if ($result) {
+                $this->application_deployment_queue->addLogEntry('Kubernetes resources created successfully.');
+
+                // Wait for deployment to be ready
+                $this->application_deployment_queue->addLogEntry('Waiting for deployment to be ready...');
+                $namespace = data_get($this->server->settings, 'kubernetes_namespace', 'default');
+                $deploymentName = $this->application->uuid;
+
+                $this->execute_remote_command([
+                    "kubectl rollout status deployment/{$deploymentName} -n {$namespace} --timeout=300s",
+                    'hidden' => false,
+                ]);
+
+                $this->application_deployment_queue->addLogEntry('Deployment ready.');
+            } else {
+                throw new \Exception('Kubernetes deployment failed.');
+            }
+        } catch (\Throwable $e) {
+            $this->application_deployment_queue->addLogEntry('Kubernetes deployment failed: ' . $e->getMessage());
+            throw $e;
+        }
     }
 
     private function analyzeBuildTimeVariables($variables)

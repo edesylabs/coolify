@@ -213,6 +213,8 @@ class Application extends BaseModel
             foreach ($application->deployment_queue as $deployment) {
                 $deployment->delete();
             }
+            // Clean up dynamic domain configuration file
+            removeDynamicConfigurationForApplication($application);
         });
     }
 
@@ -881,6 +883,34 @@ class Application extends BaseModel
     public function source()
     {
         return $this->morphTo();
+    }
+
+    public function getOrchestrator()
+    {
+        return $this->destination?->server->getOrchestrator() ?? 'none';
+    }
+
+    public function usesOrchestration()
+    {
+        $orchestrator = $this->getOrchestrator();
+
+        return in_array($orchestrator, ['swarm', 'kubernetes']);
+    }
+
+    public function canScale()
+    {
+        return $this->usesOrchestration();
+    }
+
+    public function getReplicas()
+    {
+        $orchestrator = $this->getOrchestrator();
+
+        return match ($orchestrator) {
+            'swarm' => $this->swarm_replicas ?? 1,
+            'kubernetes' => $this->kubernetes_replicas ?? 1,
+            default => 1,
+        };
     }
 
     public function isDeploymentInprogress()

@@ -686,13 +686,37 @@ class General extends Component
             $server = data_get($this->application, 'destination.server');
             if ($server) {
                 $fqdn = generateUrl(server: $server, random: $this->application->uuid);
-                $this->fqdn = $fqdn;
+
+                // Append the generated domain to existing domains instead of replacing
+                if ($this->fqdn) {
+                    // Trim whitespace and check for duplicates
+                    $existingDomains = array_map('trim', explode(',', $this->fqdn));
+
+                    // Check if the generated domain already exists
+                    if (in_array($fqdn, $existingDomains)) {
+                        $this->dispatch('error', 'Domain already exists.');
+
+                        return;
+                    }
+
+                    $this->fqdn = trim($this->fqdn).','.$fqdn;
+                } else {
+                    $this->fqdn = $fqdn;
+                }
                 $this->syncData(toModel: true);
                 $this->application->save();
                 $this->application->refresh();
                 $this->syncData();
-                $this->resetDefaultLabels();
-                $this->dispatch('success', 'Wildcard domain generated.');
+
+                // If dynamic domain management is enabled, write dynamic config file
+                // Otherwise, regenerate container labels
+                if ($this->application->settings->is_dynamic_domain_enabled) {
+                    writeDynamicConfigurationForApplication($this->application);
+                    $this->dispatch('success', 'Wildcard domain added. Changes will be live within seconds.');
+                } else {
+                    $this->resetDefaultLabels();
+                    $this->dispatch('success', 'Wildcard domain added.');
+                }
             }
         } catch (\Throwable $e) {
             return handleError($e, $this);
@@ -851,6 +875,16 @@ class General extends Component
 
             if ($oldPortsExposes !== $this->portsExposes || $oldIsContainerLabelEscapeEnabled !== $this->isContainerLabelEscapeEnabled) {
                 $this->resetDefaultLabels();
+            }
+            if ($this->application->wasChanged('fqdn')) {
+                // If dynamic domain management is enabled, write dynamic config file
+                // Otherwise, regenerate container labels (requires rebuild)
+                if ($this->application->settings->is_dynamic_domain_enabled) {
+                    writeDynamicConfigurationForApplication($this->application);
+                    $this->dispatch('success', 'Domain configuration updated. Changes will be live within seconds.');
+                } else {
+                    $this->resetDefaultLabels();
+                }
             }
             if ($this->buildPack === 'dockerimage') {
                 $this->validate([

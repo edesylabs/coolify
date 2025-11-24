@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\ApplicationsController;
 use App\Http\Controllers\Api\DatabasesController;
 use App\Http\Controllers\Api\DeployController;
 use App\Http\Controllers\Api\GithubController;
+use App\Http\Controllers\Api\KubernetesController;
 use App\Http\Controllers\Api\OtherController;
 use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\ResourcesController;
@@ -94,6 +95,11 @@ Route::group([
     Route::patch('/applications/{uuid}', [ApplicationsController::class, 'update_by_uuid'])->middleware(['api.ability:write']);
     Route::delete('/applications/{uuid}', [ApplicationsController::class, 'delete_by_uuid'])->middleware(['api.ability:write']);
 
+    // Domain Management API
+    Route::post('/applications/{uuid}/domains', [ApplicationsController::class, 'add_domains'])->middleware(['api.ability:write']);
+    Route::delete('/applications/{uuid}/domains/{domain}', [ApplicationsController::class, 'remove_domain'])->middleware(['api.ability:write']);
+    Route::get('/applications/{uuid}/ssl-status', [ApplicationsController::class, 'ssl_status'])->middleware(['api.ability:read']);
+
     Route::get('/applications/{uuid}/envs', [ApplicationsController::class, 'envs'])->middleware(['api.ability:read']);
     Route::post('/applications/{uuid}/envs', [ApplicationsController::class, 'create_env'])->middleware(['api.ability:write']);
     Route::patch('/applications/{uuid}/envs/bulk', [ApplicationsController::class, 'create_bulk_envs'])->middleware(['api.ability:write']);
@@ -104,6 +110,11 @@ Route::group([
     Route::match(['get', 'post'], '/applications/{uuid}/start', [ApplicationsController::class, 'action_deploy'])->middleware(['api.ability:write']);
     Route::match(['get', 'post'], '/applications/{uuid}/restart', [ApplicationsController::class, 'action_restart'])->middleware(['api.ability:write']);
     Route::match(['get', 'post'], '/applications/{uuid}/stop', [ApplicationsController::class, 'action_stop'])->middleware(['api.ability:write']);
+
+    // Kubernetes/Orchestrator specific endpoints
+    Route::post('/applications/{uuid}/scale', [KubernetesController::class, 'scale_application'])->middleware(['api.ability:write']);
+    Route::get('/applications/{uuid}/status', [KubernetesController::class, 'get_status'])->middleware(['api.ability:read']);
+    Route::get('/applications/{uuid}/resources', [KubernetesController::class, 'get_resources'])->middleware(['api.ability:read']);
 
     Route::get('/github-apps', [GithubController::class, 'list_github_apps'])->middleware(['api.ability:read']);
     Route::post('/github-apps', [GithubController::class, 'create_github_app'])->middleware(['api.ability:write']);
