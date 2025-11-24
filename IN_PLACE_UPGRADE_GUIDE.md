@@ -27,162 +27,104 @@ This guide shows you how to upgrade your existing Coolify installation to use yo
 
 ---
 
-## Quick Upgrade (3 Commands)
+## Quick Upgrade (2 Commands)
 
 ```bash
-# 1. Backup current setup
-cd /data/coolify/source && cp .env .env.backup-$(date +%Y%m%d)
+# 1. Download and run unified script
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+chmod +x coolify.sh
+sudo ./coolify.sh
 
-# 2. Download and run upgrade script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/upgrade-to-custom.sh
-chmod +x upgrade-to-custom.sh
-./upgrade-to-custom.sh
-
-# 3. Verify
+# 2. Verify
 docker ps | grep coolify
 ```
 
-That's it! Your Coolify now uses your custom fork.
+That's it! The script will auto-detect your setup and guide you through the upgrade with all safety features built-in.
 
 ---
 
-## Detailed Step-by-Step Process
+## Using the Unified Script
 
-### Step 1: Safety Backup (2 minutes)
+The unified `coolify-custom.sh` script handles all the steps automatically with an interactive menu:
 
-```bash
-# Create safety backup
-BACKUP_DIR="/root/coolify-backup-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$BACKUP_DIR"
+### What the Script Does
 
-# Backup database
-docker exec coolify-db pg_dump -U coolify coolify > "$BACKUP_DIR/coolify-db.sql"
+1. **Auto-detects** your current scenario:
+   - No Coolify installed → offers fresh installation
+   - Official Coolify installed → offers upgrade
+   - Custom Coolify already running → offers update/rollback options
 
-# Backup environment
-cp /data/coolify/source/.env "$BACKUP_DIR/.env.backup"
+2. **Interactive Menu** shows relevant options:
+   - Upgrade to Custom Coolify (In-Place)
+   - Pre-Flight Check Only
+   - Update Images
+   - Rollback to Official
+   - Exit
 
-# Backup docker-compose files
-cp /data/coolify/source/docker-compose*.yml "$BACKUP_DIR/" 2>/dev/null || true
+3. **Safety Features** built-in:
+   - Pre-flight validation (17 checks)
+   - Automatic backup before changes
+   - Step-by-step verification
+   - Automatic rollback on error
+   - Data integrity protection
 
-echo "Backup saved to: $BACKUP_DIR"
-```
-
-### Step 2: Update Configuration (1 minute)
-
-Edit `/data/coolify/source/.env`:
-
-```bash
-nano /data/coolify/source/.env
-```
-
-Add or update these lines:
+### Running the Script
 
 ```bash
-# Custom Coolify Configuration
-REGISTRY_URL=ghcr.io
-COOLIFY_IMAGE_NAMESPACE=edesylabs
+# Download
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+chmod +x coolify.sh
 
-# Optional: Explicitly set images
-HELPER_IMAGE=ghcr.io/edesylabs/coolify-helper
-REALTIME_IMAGE=ghcr.io/edesylabs/coolify-realtime
-
-# Optional: Custom CDN for updates
-COOLIFY_CDN=https://raw.githubusercontent.com/edesylabs/coolify/main
-COOLIFY_RELEASES_URL=https://raw.githubusercontent.com/edesylabs/coolify/main/versions.json
+# Run
+sudo ./coolify.sh
 ```
 
-Save and exit (Ctrl+X, Y, Enter).
-
-### Step 3: Update Docker Compose (1 minute)
-
-Edit `/data/coolify/source/docker-compose.yml`:
+### What You'll See
 
 ```bash
-nano /data/coolify/source/docker-compose.yml
+==============================================
+  Coolify Custom Deployment Manager
+==============================================
+
+Detecting current scenario...
+
+✓ Coolify installation found
+✓ Currently running: Official Coolify
+
+Scenario: NEEDS_UPGRADE
+  Your server has official Coolify installed.
+  You can upgrade to custom version.
+
+==============================================
+  Available Options
+==============================================
+
+1. Upgrade to Custom Coolify (In-Place)
+   → Upgrade existing Coolify to custom fork
+   → Zero downtime for your applications
+   → Automatic backup and safety checks
+
+2. Pre-Flight Check Only
+   → Check if upgrade is safe
+   → No changes made
+
+3. Exit
+
+Select an option (1-3):
 ```
 
-Find the `coolify` service image line and update it:
+### After Selecting Upgrade
 
-```yaml
-services:
-  coolify:
-    # Change this:
-    # image: ghcr.io/coollabsio/coolify:latest
+The script will:
+1. Run pre-flight safety checks
+2. Create comprehensive backup
+3. Update configuration files
+4. Pull custom Docker images
+5. Restart with new images
+6. Verify everything works
+7. Show you the results
 
-    # To this:
-    image: ${REGISTRY_URL:-ghcr.io}/${COOLIFY_IMAGE_NAMESPACE:-edesylabs}/coolify:${LATEST_IMAGE:-latest}
-```
-
-Find helper and realtime services and update similarly:
-
-```yaml
-  coolify-helper:
-    image: ${HELPER_IMAGE:-ghcr.io/edesylabs/coolify-helper:latest}
-
-  coolify-realtime:
-    image: ${REALTIME_IMAGE:-ghcr.io/edesylabs/coolify-realtime:latest}
-```
-
-Save and exit.
-
-### Step 4: Pull New Images (2-3 minutes)
-
-```bash
-cd /data/coolify/source
-
-# Pull custom images
-docker compose pull
-```
-
-You should see:
-```
-Pulling coolify         ... done
-Pulling coolify-helper  ... done
-Pulling coolify-realtime... done
-```
-
-### Step 5: Restart with New Images (2-3 minutes)
-
-```bash
-# Stop current Coolify
-docker compose down
-
-# Start with new custom images
-docker compose up -d
-
-# Wait for startup
-sleep 20
-
-# Check status
-docker ps | grep coolify
-```
-
-### Step 6: Verify Upgrade (1 minute)
-
-```bash
-# Check which images are running
-docker ps --format "table {{.Names}}\t{{.Image}}"
-
-# Should show:
-# coolify              ghcr.io/edesylabs/coolify:latest
-# coolify-realtime     ghcr.io/edesylabs/coolify-realtime:latest
-
-# Check logs for errors
-docker logs coolify --tail 50
-
-# Test database connection
-docker exec coolify php artisan tinker --execute="echo 'Servers: ' . App\Models\Server::count();"
-```
-
-### Step 7: Access and Verify UI
-
-1. Open browser: `http://YOUR_SERVER_IP:8000`
-2. Login with your existing credentials
-3. Verify:
-   - [ ] All servers visible and connected
-   - [ ] All applications listed
-   - [ ] Can navigate all pages
-   - [ ] No errors in UI
+If anything fails, it automatically rolls back to your previous state.
 
 ---
 
@@ -210,140 +152,60 @@ docker exec coolify php artisan tinker --execute="echo 'Servers: ' . App\Models\
 
 ---
 
-## Automated Upgrade Script
+## Manual Steps (Advanced Users)
 
-For convenience, here's a complete automated script:
+If you prefer to perform the upgrade manually without the unified script, here are the key steps:
 
+### 1. Create Backup
 ```bash
-#!/bin/bash
-# Save as: upgrade-to-custom.sh
-
-set -e
-
-echo "========================================"
-echo "  Coolify In-Place Upgrade to Custom"
-echo "========================================"
-echo ""
-
-# Configuration
-COOLIFY_ORG="${COOLIFY_ORG:-edesylabs}"
-COOLIFY_REGISTRY="${COOLIFY_REGISTRY:-ghcr.io}"
-
-echo "Configuration:"
-echo "  Organization: $COOLIFY_ORG"
-echo "  Registry: $COOLIFY_REGISTRY"
-echo ""
-
-# Check if running as root
-if [ $EUID != 0 ]; then
-    echo "ERROR: Please run as root"
-    exit 1
-fi
-
-# Check Coolify exists
-if [ ! -f /data/coolify/source/.env ]; then
-    echo "ERROR: Coolify not found at /data/coolify"
-    exit 1
-fi
-
-# Confirm
-read -p "Upgrade current Coolify to custom fork? (yes/no) " -r
-if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
-    echo "Cancelled."
-    exit 0
-fi
-
-echo ""
-echo "Starting upgrade..."
-echo ""
-
-# Backup
-echo "[1/6] Creating backup..."
-BACKUP_DIR="/root/coolify-pre-upgrade-$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="/root/coolify-backup-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 docker exec coolify-db pg_dump -U coolify coolify > "$BACKUP_DIR/coolify-db.sql"
 cp /data/coolify/source/.env "$BACKUP_DIR/.env.backup"
-echo "      Backup: $BACKUP_DIR"
-
-# Update .env
-echo "[2/6] Updating configuration..."
-cd /data/coolify/source
-
-# Add custom config if not present
-grep -q "REGISTRY_URL=" .env || echo "REGISTRY_URL=$COOLIFY_REGISTRY" >> .env
-grep -q "COOLIFY_IMAGE_NAMESPACE=" .env || echo "COOLIFY_IMAGE_NAMESPACE=$COOLIFY_ORG" >> .env
-
-# Update registry URL if it's the default
-sed -i "s|^REGISTRY_URL=ghcr.io$|REGISTRY_URL=$COOLIFY_REGISTRY|" .env
-sed -i "s|^COOLIFY_IMAGE_NAMESPACE=.*|COOLIFY_IMAGE_NAMESPACE=$COOLIFY_ORG|" .env
-
-echo "      ✓ Configuration updated"
-
-# Update docker-compose
-echo "[3/6] Updating docker-compose.yml..."
-# Backup original
-cp docker-compose.yml docker-compose.yml.backup
-
-# Update coolify image
-sed -i 's|ghcr.io/coollabsio/coolify|${REGISTRY_URL:-ghcr.io}/${COOLIFY_IMAGE_NAMESPACE:-edesylabs}/coolify|' docker-compose.yml
-
-echo "      ✓ docker-compose.yml updated"
-
-# Pull new images
-echo "[4/6] Pulling custom images..."
-docker compose pull
-
-# Restart
-echo "[5/6] Restarting Coolify..."
-docker compose down
-sleep 3
-docker compose up -d
-sleep 20
-
-# Verify
-echo "[6/6] Verifying upgrade..."
-if docker ps | grep -q coolify; then
-    echo "      ✓ Coolify is running"
-else
-    echo "      ✗ Coolify failed to start!"
-    echo "      Rolling back..."
-    cp "$BACKUP_DIR/.env.backup" .env
-    cp docker-compose.yml.backup docker-compose.yml
-    docker compose up -d
-    exit 1
-fi
-
-# Check images
-echo ""
-echo "Running containers:"
-docker ps --format "table {{.Names}}\t{{.Image}}" | grep coolify
-
-echo ""
-echo "========================================"
-echo "  Upgrade Completed Successfully! ✓"
-echo "========================================"
-echo ""
-echo "Your Coolify now uses custom images from:"
-echo "  $COOLIFY_REGISTRY/$COOLIFY_ORG"
-echo ""
-echo "Access Coolify at:"
-echo "  http://$(hostname -I | awk '{print $1}'):8000"
-echo ""
-echo "Backup saved to:"
-echo "  $BACKUP_DIR"
-echo ""
-echo "To rollback if needed:"
-echo "  cp $BACKUP_DIR/.env.backup /data/coolify/source/.env"
-echo "  cp $BACKUP_DIR/../docker-compose.yml.backup /data/coolify/source/docker-compose.yml"
-echo "  cd /data/coolify/source && docker compose up -d"
-echo ""
 ```
+
+### 2. Update Configuration
+Edit `/data/coolify/source/.env` and add:
+```bash
+REGISTRY_URL=ghcr.io
+COOLIFY_IMAGE_NAMESPACE=edesylabs
+```
+
+### 3. Update Docker Compose
+Edit `/data/coolify/source/docker-compose.yml` and change image references from `ghcr.io/coollabsio` to `${REGISTRY_URL:-ghcr.io}/${COOLIFY_IMAGE_NAMESPACE:-edesylabs}`
+
+### 4. Apply Changes
+```bash
+cd /data/coolify/source
+docker compose pull
+docker compose down
+docker compose up -d
+```
+
+### 5. Verify
+```bash
+docker ps | grep coolify
+docker logs coolify --tail 50
+```
+
+**Note:** The unified script handles all these steps automatically with error handling and rollback. It's the recommended approach.
 
 ---
 
 ## Rollback Procedure
 
-If you need to rollback to official Coolify:
+### Using the Unified Script (Recommended)
+
+The unified script includes a rollback option:
+
+```bash
+sudo ./coolify.sh
+# Select "Rollback to Official Coolify"
+```
+
+### Manual Rollback
+
+If you need to rollback manually:
 
 ```bash
 # Stop custom Coolify
@@ -353,7 +215,6 @@ docker compose down
 # Restore original configuration
 BACKUP_DIR=$(ls -td /root/coolify-pre-upgrade-* | head -1)
 cp "$BACKUP_DIR/.env.backup" .env
-cp docker-compose.yml.backup docker-compose.yml
 
 # Pull official images
 docker compose pull

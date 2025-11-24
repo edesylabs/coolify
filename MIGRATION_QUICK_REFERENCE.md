@@ -34,10 +34,10 @@ scp /root/coolify-migration-*.tar.gz root@NEW_SERVER_IP:/root/
 **On NEW server:**
 
 ```bash
-# Install custom Coolify
-export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/main"
-export REGISTRY_URL="ghcr.io"
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/custom-install.sh | bash
+# Install custom Coolify using unified script
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+chmod +x coolify.sh
+sudo ./coolify.sh  # Select "Install Custom Coolify" from menu
 ```
 
 ---

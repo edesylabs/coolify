@@ -109,35 +109,29 @@ docker push ghcr.io/edesylabs/coolify-realtime:latest
 
 ## Step 2: Install on Your Server
 
-### Option A: Using the Custom Install Script (Recommended)
+### Recommended: Using the Unified Script
 
 ```bash
 # On your server (as root)
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/custom-install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+chmod +x coolify.sh
+sudo ./coolify.sh
 ```
 
-### Option B: Using Environment Variables
+The script will auto-detect that Coolify is not installed and offer to install it.
 
-```bash
-# On your server (as root)
-export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/main"
-export REGISTRY_URL="ghcr.io"
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/install.sh | bash
-```
-
-### Option C: Manual Download
+### Alternative: Manual Download and Review
 
 ```bash
 # Download the script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/install.sh
+wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh
 
 # Review it (optional but recommended)
-less install.sh
+less coolify-custom.sh
 
-# Run it with custom settings
-COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/main" \
-REGISTRY_URL="ghcr.io" \
-bash install.sh
+# Run it
+chmod +x coolify-custom.sh
+sudo ./coolify-custom.sh
 ```
 
 ---

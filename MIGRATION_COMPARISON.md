@@ -27,10 +27,11 @@ Quick comparison of the two migration approaches to help you choose the right on
 
 ### Commands
 ```bash
-# Download and run upgrade script
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/upgrade-to-custom.sh
-chmod +x upgrade-to-custom.sh
-./upgrade-to-custom.sh
+# Download and run unified script
+wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh
+chmod +x coolify-custom.sh
+sudo ./coolify-custom.sh
+# Select "Upgrade to Custom Coolify (In-Place)"
 ```
 
 ### Timeline
@@ -82,7 +83,9 @@ scp /root/coolify-migration-*.tar.gz root@NEW_SERVER:/root/
 **On NEW server:**
 ```bash
 # Install custom Coolify
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/custom-install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+chmod +x coolify.sh
+sudo ./coolify.sh  # Select "Install Custom Coolify"
 
 # Restore data
 wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/restore-from-migration.sh
@@ -288,10 +291,11 @@ Coolify Control Plane (Server A or E)
 You're confident in your custom images and want quick results.
 
 ```bash
-# One command upgrade
-wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/upgrade-to-custom.sh
-chmod +x upgrade-to-custom.sh
-./upgrade-to-custom.sh
+# One command upgrade with unified script
+wget https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh
+chmod +x coolify-custom.sh
+sudo ./coolify-custom.sh
+# Select "Upgrade to Custom Coolify (In-Place)"
 ```
 
 ### Go with New Server Migration if:

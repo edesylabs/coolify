@@ -20,7 +20,9 @@ Complete guide to data safety, error handling, and recovery procedures for Cooli
 **Before** any changes are made:
 
 ```bash
-./pre-flight-check.sh
+# Pre-flight checks are built into the unified script
+sudo ./coolify.sh
+# Select option: "Pre-Flight Check Only"
 ```
 
 **What it checks:**
@@ -249,13 +251,15 @@ All your data is safe and intact.
 
 ## 🔄 Manual Recovery Procedures
 
-### Recovery Option 1: Using Automatic Rollback Script
+### Recovery Option 1: Using Unified Script Rollback
 
 If you notice issues after upgrade:
 
 ```bash
-cd /Users/suvojit/edesy-labs/coolify/scripts
-./rollback-to-official.sh
+# Run the unified script
+sudo ./coolify.sh
+
+# Select "Rollback to Official Coolify" from the menu
 ```
 
 **What it does:**
@@ -413,7 +417,8 @@ Use this checklist if you need to recover:
 
 1. **Run Pre-Flight Check:**
    ```bash
-   ./pre-flight-check.sh
+   sudo ./coolify.sh
+   # Select "Pre-Flight Check Only"
    ```
    Only proceed if status is GOOD or EXCELLENT
 
@@ -485,7 +490,8 @@ Use this checklist if you need to recover:
 
 1. **Run Pre-Flight:**
    ```bash
-   ./pre-flight-check.sh
+   sudo ./coolify.sh
+   # Select "Pre-Flight Check Only"
    ```
    Verify all checks pass
 

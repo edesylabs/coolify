@@ -142,12 +142,12 @@ On your **NEW Coolify server** (Server E):
 
 ```bash
 # Install your custom Coolify
-export COOLIFY_CDN="https://raw.githubusercontent.com/edesylabs/coolify/main"
-export REGISTRY_URL="ghcr.io"
-curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/custom-install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/main/scripts/coolify-custom.sh -o coolify.sh
+chmod +x coolify.sh
+sudo ./coolify.sh
 ```
 
-Wait for installation to complete. **Don't configure it yet.**
+Select "Install Custom Coolify" from the menu. Wait for installation to complete. **Don't configure it yet.**
 
 ### Step 2.2: Stop New Coolify (Temporarily)
 
