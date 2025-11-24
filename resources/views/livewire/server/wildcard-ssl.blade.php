@@ -1,12 +1,19 @@
 <div>
-    <form wire:submit='submit' class="flex flex-col gap-4">
-        <div class="flex flex-col gap-2">
-            <h2 class="text-lg font-semibold">Wildcard SSL Certificates</h2>
-            <p class="text-sm text-gray-600 dark:text-gray-400">
-                Enable wildcard SSL certificates for automatic SSL provisioning on all subdomains (e.g., *.course-app.edesy.in).
-                <br>Requires DNS-01 challenge with a supported DNS provider.
-            </p>
-        </div>
+    <x-slot:title>
+        {{ data_get_str($server, 'name')->limit(10) }} > Wildcard SSL | Coolify
+    </x-slot>
+    <livewire:server.navbar :server="$server" />
+    <div class="flex flex-col h-full gap-8 sm:flex-row">
+        <x-server.sidebar :server="$server" activeMenu="wildcard-ssl" />
+        <div class="w-full">
+            <form wire:submit='submit' class="flex flex-col gap-4">
+                <div class="flex flex-col gap-2">
+                    <h2>Wildcard SSL Certificates</h2>
+                    <p class="text-sm text-gray-600 dark:text-gray-400">
+                        Enable wildcard SSL certificates for automatic SSL provisioning on all subdomains (e.g., *.course-app.edesy.in).
+                        <br>Requires DNS-01 challenge with a supported DNS provider.
+                    </p>
+                </div>
 
         {{-- Enable Wildcard SSL --}}
         <x-forms.checkbox
@@ -223,5 +230,8 @@
             <li>Certificates are automatically renewed before expiration</li>
             <li>After saving, restart your proxy for changes to take effect</li>
         </ul>
+    </div>
+            </form>
+        </div>
     </div>
 </div>

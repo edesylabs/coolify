@@ -3583,6 +3583,14 @@ class ApplicationsController extends Controller
             $certificateType
         ));
 
+        // Dispatch certificate status polling job
+        \App\Jobs\CheckCertificateStatusJob::dispatch(
+            $application,
+            $newDomains->toArray(),
+            $certificateType,
+            $application->team()->id
+        )->delay(now()->addSeconds(60)); // Wait 60 seconds before first check
+
         // Regenerate proxy configuration
         generateDefaultProxyConfiguration($application->destination->server);
 

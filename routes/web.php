@@ -58,6 +58,7 @@ use App\Livewire\Server\Resources as ResourcesShow;
 use App\Livewire\Server\Security\Patches;
 use App\Livewire\Server\Security\TerminalAccess;
 use App\Livewire\Server\Show as ServerShow;
+use App\Livewire\Server\WildcardSsl;
 use App\Livewire\Settings\Advanced as SettingsAdvanced;
 use App\Livewire\Settings\Index as SettingsIndex;
 use App\Livewire\Settings\Updates as SettingsUpdates;
@@ -254,6 +255,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/', ServerShow::class)->name('server.show');
         Route::get('/advanced', ServerAdvanced::class)->name('server.advanced');
         Route::get('/orchestrator', Orchestrator::class)->name('server.orchestrator');
+        Route::get('/wildcard-ssl', WildcardSsl::class)->name('server.wildcard-ssl');
         Route::get('/private-key', PrivateKeyShow::class)->name('server.private-key');
         Route::get('/cloud-provider-token', CloudProviderTokenShow::class)->name('server.cloud-provider-token');
         Route::get('/ca-certificate', CaCertificateShow::class)->name('server.ca-certificate');
