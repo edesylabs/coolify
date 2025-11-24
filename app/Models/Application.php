@@ -885,6 +885,34 @@ class Application extends BaseModel
         return $this->morphTo();
     }
 
+    public function getOrchestrator()
+    {
+        return $this->destination?->server->getOrchestrator() ?? 'none';
+    }
+
+    public function usesOrchestration()
+    {
+        $orchestrator = $this->getOrchestrator();
+
+        return in_array($orchestrator, ['swarm', 'kubernetes']);
+    }
+
+    public function canScale()
+    {
+        return $this->usesOrchestration();
+    }
+
+    public function getReplicas()
+    {
+        $orchestrator = $this->getOrchestrator();
+
+        return match ($orchestrator) {
+            'swarm' => $this->swarm_replicas ?? 1,
+            'kubernetes' => $this->kubernetes_replicas ?? 1,
+            default => 1,
+        };
+    }
+
     public function isDeploymentInprogress()
     {
         $deployments = ApplicationDeploymentQueue::where('application_id', $this->id)->whereIn('status', [ApplicationDeploymentStatus::IN_PROGRESS, ApplicationDeploymentStatus::QUEUED])->count();

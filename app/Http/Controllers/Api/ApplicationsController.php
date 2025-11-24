@@ -3442,4 +3442,345 @@ class ApplicationsController extends Controller
             }
         }
     }
+
+    /**
+     * Add domains to an application
+     *
+     * Endpoint: POST /api/v1/applications/{uuid}/domains
+     */
+    #[OA\Post(
+        summary: 'Add Domains',
+        description: 'Add one or more domains to an application. Perfect for multi-tenant SaaS applications.',
+        path: '/applications/{uuid}/domains',
+        operationId: 'add-application-domains',
+        security: [
+            ['bearerAuth' => []],
+        ],
+        tags: ['Applications'],
+        parameters: [
+            new OA\Parameter(
+                name: 'uuid',
+                in: 'path',
+                required: true,
+                description: 'Application UUID',
+                schema: new OA\Schema(type: 'string')
+            ),
+        ],
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: [
+                new OA\MediaType(
+                    mediaType: 'application/json',
+                    schema: new OA\Schema(
+                        type: 'object',
+                        required: ['domains'],
+                        properties: [
+                            'domains' => [
+                                'type' => 'array',
+                                'description' => 'Array of domains to add',
+                                'items' => new OA\Schema(type: 'string'),
+                                'example' => ['site1.course-app.edesy.in', 'site2.course-app.edesy.in'],
+                            ],
+                            'force_domain_override' => [
+                                'type' => 'boolean',
+                                'description' => 'Force add domains even if conflicts exist',
+                                'default' => false,
+                            ],
+                        ]
+                    )
+                ),
+            ]
+        ),
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Domains added successfully',
+                content: new OA\MediaType(
+                    mediaType: 'application/json',
+                    schema: new OA\Schema(
+                        type: 'object',
+                        properties: [
+                            'message' => ['type' => 'string', 'example' => 'Domains added successfully'],
+                            'domains' => ['type' => 'array', 'items' => new OA\Schema(type: 'string')],
+                            'fqdn' => ['type' => 'string', 'example' => 'app.com,site1.app.com,site2.app.com'],
+                        ]
+                    )
+                )
+            ),
+            new OA\Response(
+                response: 409,
+                description: 'Domain conflicts detected',
+            ),
+            new OA\Response(
+                response: 404,
+                description: 'Application not found',
+            ),
+        ]
+    )]
+    public function add_domains(Request $request, string $uuid)
+    {
+        $teamId = getTeamIdFromToken();
+        if (is_null($teamId)) {
+            return invalidTokenResponse();
+        }
+
+        $application = Application::ownedByCurrentTeamAPI($teamId)->where('uuid', $uuid)->first();
+        if (! $application) {
+            return response()->json(['message' => 'Application not found.'], 404);
+        }
+
+        $validated = $request->validate([
+            'domains' => 'required|array',
+            'domains.*' => 'required|string',
+            'force_domain_override' => 'boolean',
+        ]);
+
+        $newDomains = collect($validated['domains'])->map(function ($domain) {
+            return str($domain)->trim()->lower()->toString();
+        });
+
+        // Get existing domains
+        $existingDomains = collect(explode(',', $application->fqdn))->filter(fn ($d) => ! empty($d));
+
+        // Check for conflicts
+        foreach ($newDomains as $domain) {
+            $result = checkIfDomainIsAlreadyUsedViaAPI([$domain], $teamId, $application->uuid);
+            if ($result['hasConflicts'] && ! $request->boolean('force_domain_override')) {
+                return response()->json([
+                    'message' => 'Domain conflicts detected. Use force_domain_override=true to proceed.',
+                    'conflicts' => $result['conflicts'],
+                    'warning' => 'Using the same domain for multiple resources can cause routing conflicts.',
+                ], 409);
+            }
+        }
+
+        // Merge and deduplicate domains
+        $allDomains = $existingDomains->merge($newDomains)->unique()->implode(',');
+
+        $application->fqdn = $allDomains;
+        $application->save();
+
+        // Determine certificate type
+        $server = $application->destination->server;
+        $wildcardSslEnabled = $server->settings->is_wildcard_ssl_enabled ?? false;
+        $wildcardDomain = $server->settings->wildcard_ssl_domain ?? null;
+        $certificateType = 'http-01';
+
+        if ($wildcardSslEnabled && $wildcardDomain) {
+            $wildcardPattern = str_replace('*.', '', $wildcardDomain);
+            foreach ($newDomains as $domain) {
+                if (str($domain)->contains($wildcardPattern)) {
+                    $certificateType = 'dns-01';
+                    break;
+                }
+            }
+        }
+
+        // Dispatch provisioning started event
+        event(new \App\Events\DomainProvisioningStarted(
+            $application,
+            $newDomains->toArray(),
+            $certificateType
+        ));
+
+        // Regenerate proxy configuration
+        generateDefaultProxyConfiguration($application->destination->server);
+
+        return response()->json([
+            'message' => 'Domains added successfully',
+            'domains' => explode(',', $allDomains),
+            'fqdn' => $allDomains,
+            'certificate_type' => $certificateType,
+        ], 200);
+    }
+
+    /**
+     * Remove domain from an application
+     *
+     * Endpoint: DELETE /api/v1/applications/{uuid}/domains/{domain}
+     */
+    #[OA\Delete(
+        summary: 'Remove Domain',
+        description: 'Remove a specific domain from an application',
+        path: '/applications/{uuid}/domains/{domain}',
+        operationId: 'remove-application-domain',
+        security: [
+            ['bearerAuth' => []],
+        ],
+        tags: ['Applications'],
+        parameters: [
+            new OA\Parameter(
+                name: 'uuid',
+                in: 'path',
+                required: true,
+                description: 'Application UUID',
+                schema: new OA\Schema(type: 'string')
+            ),
+            new OA\Parameter(
+                name: 'domain',
+                in: 'path',
+                required: true,
+                description: 'Domain to remove (URL encoded)',
+                schema: new OA\Schema(type: 'string'),
+                example: 'site1.course-app.edesy.in'
+            ),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Domain removed successfully',
+                content: new OA\MediaType(
+                    mediaType: 'application/json',
+                    schema: new OA\Schema(
+                        type: 'object',
+                        properties: [
+                            'message' => ['type' => 'string', 'example' => 'Domain removed successfully'],
+                            'removed_domain' => ['type' => 'string'],
+                            'remaining_domains' => ['type' => 'array', 'items' => new OA\Schema(type: 'string')],
+                        ]
+                    )
+                )
+            ),
+            new OA\Response(
+                response: 404,
+                description: 'Application or domain not found',
+            ),
+        ]
+    )]
+    public function remove_domain(Request $request, string $uuid, string $domain)
+    {
+        $teamId = getTeamIdFromToken();
+        if (is_null($teamId)) {
+            return invalidTokenResponse();
+        }
+
+        $application = Application::ownedByCurrentTeamAPI($teamId)->where('uuid', $uuid)->first();
+        if (! $application) {
+            return response()->json(['message' => 'Application not found.'], 404);
+        }
+
+        $domainToRemove = urldecode($domain);
+        $domains = collect(explode(',', $application->fqdn))
+            ->filter(fn ($d) => ! empty($d))
+            ->filter(fn ($d) => $d !== $domainToRemove);
+
+        if ($domains->count() === collect(explode(',', $application->fqdn))->filter(fn ($d) => ! empty($d))->count()) {
+            return response()->json(['message' => 'Domain not found in application.'], 404);
+        }
+
+        $application->fqdn = $domains->implode(',');
+        $application->save();
+
+        // Regenerate proxy configuration
+        generateDefaultProxyConfiguration($application->destination->server);
+
+        return response()->json([
+            'message' => 'Domain removed successfully',
+            'removed_domain' => $domainToRemove,
+            'remaining_domains' => $domains->values()->all(),
+        ], 200);
+    }
+
+    /**
+     * Get SSL/Domain status for an application
+     *
+     * Endpoint: GET /api/v1/applications/{uuid}/ssl-status
+     */
+    #[OA\Get(
+        summary: 'Get SSL Status',
+        description: 'Get SSL certificate and domain status for an application',
+        path: '/applications/{uuid}/ssl-status',
+        operationId: 'get-application-ssl-status',
+        security: [
+            ['bearerAuth' => []],
+        ],
+        tags: ['Applications'],
+        parameters: [
+            new OA\Parameter(
+                name: 'uuid',
+                in: 'path',
+                required: true,
+                description: 'Application UUID',
+                schema: new OA\Schema(type: 'string')
+            ),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'SSL status retrieved successfully',
+                content: new OA\MediaType(
+                    mediaType: 'application/json',
+                    schema: new OA\Schema(
+                        type: 'object',
+                        properties: [
+                            'uuid' => ['type' => 'string'],
+                            'name' => ['type' => 'string'],
+                            'domains' => [
+                                'type' => 'array',
+                                'items' => new OA\Schema(
+                                    type: 'object',
+                                    properties: [
+                                        'domain' => ['type' => 'string'],
+                                        'ssl_enabled' => ['type' => 'boolean'],
+                                        'wildcard_supported' => ['type' => 'boolean'],
+                                        'certificate_type' => ['type' => 'string', 'enum' => ['http-01', 'dns-01', 'none']],
+                                    ]
+                                ),
+                            ],
+                            'wildcard_ssl_enabled' => ['type' => 'boolean'],
+                            'server_has_wildcard_ssl' => ['type' => 'boolean'],
+                        ]
+                    )
+                )
+            ),
+            new OA\Response(
+                response: 404,
+                description: 'Application not found',
+            ),
+        ]
+    )]
+    public function ssl_status(Request $request, string $uuid)
+    {
+        $teamId = getTeamIdFromToken();
+        if (is_null($teamId)) {
+            return invalidTokenResponse();
+        }
+
+        $application = Application::ownedByCurrentTeamAPI($teamId)->where('uuid', $uuid)->first();
+        if (! $application) {
+            return response()->json(['message' => 'Application not found.'], 404);
+        }
+
+        $server = $application->destination->server;
+        $wildcardSslEnabled = $server->settings->is_wildcard_ssl_enabled ?? false;
+        $wildcardDomain = $server->settings->wildcard_ssl_domain ?? null;
+
+        $domains = collect(explode(',', $application->fqdn))
+            ->filter(fn ($d) => ! empty($d))
+            ->map(function ($domain) use ($wildcardSslEnabled, $wildcardDomain) {
+                $isWildcardSupported = false;
+
+                // Check if domain matches wildcard pattern
+                if ($wildcardSslEnabled && $wildcardDomain) {
+                    $wildcardPattern = str_replace('*.', '', $wildcardDomain);
+                    $isWildcardSupported = str($domain)->contains($wildcardPattern);
+                }
+
+                return [
+                    'domain' => $domain,
+                    'ssl_enabled' => true, // Traefik handles SSL automatically
+                    'wildcard_supported' => $isWildcardSupported,
+                    'certificate_type' => $isWildcardSupported ? 'dns-01' : 'http-01',
+                ];
+            });
+
+        return response()->json([
+            'uuid' => $application->uuid,
+            'name' => $application->name,
+            'domains' => $domains->values()->all(),
+            'wildcard_ssl_enabled' => $wildcardSslEnabled,
+            'server_has_wildcard_ssl' => $wildcardSslEnabled,
+            'wildcard_domain' => $wildcardDomain,
+        ], 200);
+    }
 }

@@ -17,6 +17,11 @@
                     href="{{ route('project.application.swarm', ['project_uuid' => $project->uuid, 'environment_uuid' => $environment->uuid, 'application_uuid' => $application->uuid]) }}">Swarm
                     Configuration</a>
             @endif
+            @if ($application->destination->server->isKubernetes())
+                <a class="menu-item" wire:current.exact="menu-item-active"
+                    href="{{ route('project.application.kubernetes', ['project_uuid' => $project->uuid, 'environment_uuid' => $environment->uuid, 'application_uuid' => $application->uuid]) }}">Kubernetes
+                    Configuration</a>
+            @endif
             <a class='menu-item' wire:current.exact="menu-item-active"
                 href="{{ route('project.application.environment-variables', ['project_uuid' => $project->uuid, 'environment_uuid' => $environment->uuid, 'application_uuid' => $application->uuid]) }}">Environment
                 Variables</a>
@@ -81,6 +86,8 @@
                 <livewire:project.application.general :application="$application" />
             @elseif ($currentRoute === 'project.application.swarm' && $application->destination->server->isSwarm())
                 <livewire:project.application.swarm :application="$application" />
+            @elseif ($currentRoute === 'project.application.kubernetes' && $application->destination->server->isKubernetes())
+                <livewire:project.application.kubernetes :application="$application" />
             @elseif ($currentRoute === 'project.application.advanced')
                 <livewire:project.application.advanced :application="$application" />
             @elseif ($currentRoute === 'project.application.environment-variables')

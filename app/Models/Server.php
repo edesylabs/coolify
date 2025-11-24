@@ -889,6 +889,11 @@ $schema://$host {
         return $this->hasMany(SwarmDocker::class);
     }
 
+    public function kubernetesClusters()
+    {
+        return $this->hasMany(KubernetesCluster::class);
+    }
+
     public function privateKey()
     {
         return $this->belongsTo(PrivateKey::class);
@@ -994,6 +999,33 @@ $schema://$host {
     public function isSwarmWorker()
     {
         return data_get($this, 'settings.is_swarm_worker');
+    }
+
+    public function isKubernetes()
+    {
+        return data_get($this, 'settings.orchestrator') === 'kubernetes';
+    }
+
+    public function isKubernetesMaster()
+    {
+        return data_get($this, 'settings.is_kubernetes_master');
+    }
+
+    public function isKubernetesWorker()
+    {
+        return data_get($this, 'settings.is_kubernetes_worker');
+    }
+
+    public function getOrchestrator()
+    {
+        return data_get($this, 'settings.orchestrator', 'none');
+    }
+
+    public function usesOrchestration()
+    {
+        $orchestrator = $this->getOrchestrator();
+
+        return in_array($orchestrator, ['swarm', 'kubernetes']);
     }
 
     public function serverStatus(): bool
