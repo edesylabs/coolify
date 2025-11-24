@@ -15,7 +15,7 @@ set -e # Exit immediately if a command exits with a non-zero status
 ## $1 could be empty, so we need to disable this check
 #set -u # Treat unset variables as an error and exit
 set -o pipefail # Cause a pipeline to return the status of the last command that exited with a non-zero status
-CDN="https://cdn.coollabs.io/coolify"
+CDN="${COOLIFY_CDN:-https://raw.githubusercontent.com/edesylabs/coolify/main}"
 DATE=$(date +"%Y%m%d-%H%M%S")
 
 OS_TYPE=$(grep -w "ID" /etc/os-release | cut -d "=" -f 2 | tr -d '"')
@@ -45,7 +45,7 @@ else
         REGISTRY_URL=$(grep "^REGISTRY_URL=" "$ENV_FILE" | cut -d '=' -f2)
         echo "Using registry URL from .env: $REGISTRY_URL"
     else
-        REGISTRY_URL="ghcr.io"
+        REGISTRY_URL="${COOLIFY_REGISTRY:-ghcr.io}"
         echo "Using default registry URL: $REGISTRY_URL"
     fi
 fi
