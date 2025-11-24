@@ -76,6 +76,9 @@ class Advanced extends Component
     #[Validate(['boolean'])]
     public bool $isConnectToDockerNetworkEnabled = false;
 
+    #[Validate(['boolean'])]
+    public bool $isDynamicDomainEnabled = false;
+
     public function mount()
     {
         try {
@@ -109,6 +112,7 @@ class Advanced extends Component
             $this->application->settings->is_stripprefix_enabled = $this->isStripprefixEnabled;
             $this->application->settings->is_raw_compose_deployment_enabled = $this->isRawComposeDeploymentEnabled;
             $this->application->settings->connect_to_docker_network = $this->isConnectToDockerNetworkEnabled;
+            $this->application->settings->is_dynamic_domain_enabled = $this->isDynamicDomainEnabled;
             $this->application->settings->disable_build_cache = $this->disableBuildCache;
             $this->application->settings->save();
         } else {
@@ -133,6 +137,7 @@ class Advanced extends Component
             $this->customInternalName = $this->application->settings->custom_internal_name;
             $this->isRawComposeDeploymentEnabled = $this->application->settings->is_raw_compose_deployment_enabled;
             $this->isConnectToDockerNetworkEnabled = $this->application->settings->connect_to_docker_network;
+            $this->isDynamicDomainEnabled = $this->application->settings->is_dynamic_domain_enabled;
             $this->disableBuildCache = $this->application->settings->disable_build_cache;
         }
     }
@@ -174,6 +179,38 @@ class Advanced extends Component
                 $this->application->parse();
             }
             $this->syncData(true);
+
+            // Prevent disabling consistent container names if dynamic domain management is enabled
+            if ($this->application->settings->wasChanged('is_consistent_container_name_enabled')) {
+                if (! $this->application->settings->is_consistent_container_name_enabled && $this->application->settings->is_dynamic_domain_enabled) {
+                    $this->application->settings->is_consistent_container_name_enabled = true;
+                    $this->application->settings->save();
+                    $this->dispatch('error', 'Cannot disable Consistent Container Names while Dynamic Domain Management is enabled. Please disable Dynamic Domain Management first.');
+
+                    return;
+                }
+            }
+
+            // Handle dynamic domain management toggle
+            if ($this->application->settings->wasChanged('is_dynamic_domain_enabled')) {
+                if ($this->application->settings->is_dynamic_domain_enabled) {
+                    // Feature enabled: automatically enable consistent container names (required)
+                    if (! $this->application->settings->is_consistent_container_name_enabled) {
+                        $this->application->settings->is_consistent_container_name_enabled = true;
+                        $this->application->settings->save();
+                        $this->dispatch('info', 'Consistent Container Names automatically enabled (required for dynamic domain management).');
+                    }
+
+                    // Write dynamic config file
+                    writeDynamicConfigurationForApplication($this->application);
+                    $this->dispatch('info', 'Dynamic domain management enabled. Domains can now be added without rebuilding. Note: Manual rollback to previous container versions is not available with this feature.');
+                } else {
+                    // Feature disabled: remove dynamic config file and regenerate labels
+                    removeDynamicConfigurationForApplication($this->application);
+                    $this->resetDefaultLabels();
+                    $this->dispatch('info', 'Dynamic domain management disabled. Domain changes will now require rebuilding.');
+                }
+            }
 
             if ($reset) {
                 $this->resetDefaultLabels();

@@ -99,11 +99,11 @@
                             helper="Readonly labels are disabled. You can set the domains in the labels section."
                             x-bind:disabled="!canUpdate" />
                     @else
-                        <x-forms.input placeholder="https://coolify.io" wire:model="fqdn" label="Domains"
-                            helper="You can specify one domain with path or more with comma. You can specify a port to bind the domain to.<br><br><span class='text-helper'>Example</span><br>- http://app.coolify.io,https://cloud.coolify.io/dashboard<br>- http://app.coolify.io/api/v3<br>- http://app.coolify.io:3000 -> app.coolify.io will point to port 3000 inside the container. "
+                        <x-forms.domain-input placeholder="https://coolify.io" wire:model="fqdn" label="Domains"
+                            helper="You can specify one domain with path or more. You can specify a port to bind the domain to.<br><br><span class='text-helper'>Example</span><br>- http://app.coolify.io,https://cloud.coolify.io/dashboard<br>- http://app.coolify.io/api/v3<br>- http://app.coolify.io:3000 -> app.coolify.io will point to port 3000 inside the container. "
                             x-bind:disabled="!canUpdate" />
                         @can('update', $application)
-                            <x-forms.button wire:click="getWildcardDomain">Generate Domain
+                            <x-forms.button wire:click="getWildcardDomain">+ Generate Domain
                             </x-forms.button>
                         @endcan
                     @endif

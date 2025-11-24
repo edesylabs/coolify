@@ -69,6 +69,11 @@
                     helper="By default, you do not reach the Coolify defined networks.<br>Starting a docker compose based resource will have an internal network. <br>If you connect to a Coolify defined network, you maybe need to use different internal DNS names to connect to a resource.<br><br>For more information, check <a class='underline dark:text-white' target='_blank' href='https://coolify.io/docs/knowledge-base/docker/compose#connect-to-predefined-networks'>this</a>."
                     canGate="update" :canResource="$application" />
             @endif
+            <h3 class="pt-4">Domains</h3>
+            <x-forms.checkbox
+                helper="Enable dynamic domain management for multi-tenant applications. Allows adding/removing domains without rebuilding the container. <span class='font-bold dark:text-warning'>Your application must handle routing internally (e.g., read Host header).</span><br><br><span class='font-bold dark:text-warning'>Important:</span> This feature requires <span class='font-bold'>Consistent Container Names</span> to be enabled. With consistent names, only one container version exists at a time, which means <span class='font-bold dark:text-warning'>manual rollback to previous container versions is not possible</span>. However, automatic rollback during failed deployments still works, and you can always redeploy a previous git commit."
+                instantSave id="isDynamicDomainEnabled" label="Dynamic Domain Management" canGate="update"
+                :canResource="$application" />
             <h3 class="pt-4">Logs</h3>
             <x-forms.checkbox helper="Drain logs to your configured log drain endpoint in your Server settings."
                 instantSave id="isLogDrainEnabled" label="Drain Logs" canGate="update" :canResource="$application" />

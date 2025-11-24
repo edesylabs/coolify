@@ -2321,26 +2321,35 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
         $persistent_storages = $this->generate_local_persistent_volumes();
         $persistent_file_volumes = $this->application->fileStorages()->get();
         $volume_names = $this->generate_local_persistent_volumes_only_volume_names();
-        if (data_get($this->application, 'custom_labels')) {
-            $this->application->parseContainerLabels();
-            $labels = collect(preg_split("/\r\n|\n|\r/", base64_decode($this->application->custom_labels)));
-            $labels = $labels->filter(function ($value, $key) {
-                return ! Str::startsWith($value, 'coolify.');
-            });
-            $this->application->custom_labels = base64_encode($labels->implode("\n"));
-            $this->application->save();
+        // If dynamic domain management is enabled, skip domain routing labels
+        // The routing will be handled by Traefik file provider instead
+        if ($this->application->settings->is_dynamic_domain_enabled && $this->pull_request_id === 0) {
+            $labels = collect([]);
+            // Write dynamic configuration file for domain routing
+            writeDynamicConfigurationForApplication($this->application);
+            $this->application_deployment_queue->addLogEntry('Using dynamic domain management - routing configured via file provider');
         } else {
-            if ($this->application->settings->is_container_label_readonly_enabled) {
+            if (data_get($this->application, 'custom_labels')) {
+                $this->application->parseContainerLabels();
+                $labels = collect(preg_split("/\r\n|\n|\r/", base64_decode($this->application->custom_labels)));
+                $labels = $labels->filter(function ($value, $key) {
+                    return ! Str::startsWith($value, 'coolify.');
+                });
+                $this->application->custom_labels = base64_encode($labels->implode("\n"));
+                $this->application->save();
+            } else {
+                if ($this->application->settings->is_container_label_readonly_enabled) {
+                    $labels = collect(generateLabelsApplication($this->application, $this->preview));
+                }
+            }
+            if ($this->pull_request_id !== 0) {
                 $labels = collect(generateLabelsApplication($this->application, $this->preview));
             }
-        }
-        if ($this->pull_request_id !== 0) {
-            $labels = collect(generateLabelsApplication($this->application, $this->preview));
-        }
-        if ($this->application->settings->is_container_label_escape_enabled) {
-            $labels = $labels->map(function ($value, $key) {
-                return escapeDollarSign($value);
-            });
+            if ($this->application->settings->is_container_label_escape_enabled) {
+                $labels = $labels->map(function ($value, $key) {
+                    return escapeDollarSign($value);
+                });
+            }
         }
         $labels = $labels->merge(defaultLabels($this->application->id, $this->application->uuid, $this->application->project()->name, $this->application->name, $this->application->environment->name, $this->pull_request_id))->toArray();
 

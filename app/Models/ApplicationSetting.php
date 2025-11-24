@@ -14,6 +14,7 @@ class ApplicationSetting extends Model
         'is_preserve_repository_enabled' => 'boolean',
         'is_container_label_escape_enabled' => 'boolean',
         'is_container_label_readonly_enabled' => 'boolean',
+        'is_dynamic_domain_enabled' => 'boolean',
         'use_build_secrets' => 'boolean',
         'is_auto_deploy_enabled' => 'boolean',
         'is_force_https_enabled' => 'boolean',

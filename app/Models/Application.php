@@ -213,6 +213,8 @@ class Application extends BaseModel
             foreach ($application->deployment_queue as $deployment) {
                 $deployment->delete();
             }
+            // Clean up dynamic domain configuration file
+            removeDynamicConfigurationForApplication($application);
         });
     }
 
