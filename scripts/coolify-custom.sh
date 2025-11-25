@@ -12,7 +12,7 @@ set -o pipefail
 
 COOLIFY_ORG="${COOLIFY_ORG:-edesylabs}"
 COOLIFY_REGISTRY="${COOLIFY_REGISTRY:-ghcr.io}"
-COOLIFY_CDN="${COOLIFY_CDN:-https://raw.githubusercontent.com/edesylabs/coolify/main}"
+COOLIFY_CDN="${COOLIFY_CDN:-https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main}"
 
 # Colors
 RED='\033[0;31m'
@@ -329,13 +329,24 @@ perform_upgrade() {
 
     # Step 5: Update compose files
     print_step "5" "Updating docker-compose files..."
-    curl -fsSL "$COOLIFY_CDN/docker-compose.yml" -o docker-compose.yml.new || return 1
-    curl -fsSL "$COOLIFY_CDN/docker-compose.prod.yml" -o docker-compose.prod.yml.new || return 1
+
+    if ! curl -fsSL "$COOLIFY_CDN/docker-compose.yml" -o docker-compose.yml.new; then
+        echo -e "${RED}✗ Failed to download docker-compose.yml from $COOLIFY_CDN${NC}"
+        return 1
+    fi
+
+    if ! curl -fsSL "$COOLIFY_CDN/docker-compose.prod.yml" -o docker-compose.prod.yml.new; then
+        echo -e "${RED}✗ Failed to download docker-compose.prod.yml from $COOLIFY_CDN${NC}"
+        return 1
+    fi
 
     sed -i "s|ghcr.io/coollabsio|$COOLIFY_REGISTRY/$COOLIFY_ORG|g" docker-compose.yml.new
     sed -i "s|ghcr.io/coollabsio|$COOLIFY_REGISTRY/$COOLIFY_ORG|g" docker-compose.prod.yml.new
 
-    docker compose -f docker-compose.yml.new config >/dev/null 2>&1 || return 1
+    if ! docker compose -f docker-compose.yml.new config >/dev/null 2>&1; then
+        echo -e "${RED}✗ Invalid docker-compose.yml configuration${NC}"
+        return 1
+    fi
 
     mv docker-compose.yml.new docker-compose.yml
     mv docker-compose.prod.yml.new docker-compose.prod.yml
