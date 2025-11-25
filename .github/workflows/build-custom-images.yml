@@ -61,7 +61,7 @@ jobs:
       - name: Build and push coolify-helper image
         uses: docker/build-push-action@v5
         with:
-          context: ./docker/coolify-helper
+          context: .
           file: ./docker/coolify-helper/Dockerfile
           push: true
           tags: |
@@ -89,7 +89,7 @@ jobs:
       - name: Build and push coolify-realtime image
         uses: docker/build-push-action@v5
         with:
-          context: ./docker/coolify-realtime
+          context: .
           file: ./docker/coolify-realtime/Dockerfile
           push: true
           tags: |
