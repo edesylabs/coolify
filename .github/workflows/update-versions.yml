@@ -1,0 +1,47 @@
+name: Update versions.json
+
+on:
+  workflow_run:
+    workflows: ["Build Custom Coolify Images"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to set (e.g., 4.0.0-beta.445)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  update-versions:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get current version
+        id: version
+        run: |
+          VERSION=$(grep "'version' => '" config/constants.php | sed -E "s/.*'version' => '([^']+)'.*/\1/")
+          echo "current=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update versions.json
+        run: |
+          jq --arg ver "${{ steps.version.outputs.current }}" \
+            '.coolify.v4.version = $ver' versions.json > versions.tmp
+          mv versions.tmp versions.json
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if ! git diff --quiet versions.json; then
+            git add versions.json
+            git commit -m "chore: Update versions.json to ${{ steps.version.outputs.current }}"
+            git push
+          fi

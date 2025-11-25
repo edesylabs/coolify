@@ -51,6 +51,12 @@ echo "Checking and updating environment variables if necessary..." >>"$LOGFILE"
 update_env_var "PUSHER_APP_ID" "$(openssl rand -hex 32)"
 update_env_var "PUSHER_APP_KEY" "$(openssl rand -hex 32)"
 update_env_var "PUSHER_APP_SECRET" "$(openssl rand -hex 32)"
+update_env_var "REGISTRY_URL" "$REGISTRY_URL"
+update_env_var "COOLIFY_IMAGE_NAMESPACE" "$IMAGE_NAMESPACE"
+update_env_var "COMPOSE_FILE" "docker-compose.yml:docker-compose.prod.yml"
+update_env_var "COOLIFY_CDN" "$CDN"
+update_env_var "HELPER_IMAGE" "${REGISTRY_URL}/${IMAGE_NAMESPACE}/coolify-helper"
+update_env_var "REALTIME_IMAGE" "${REGISTRY_URL}/${IMAGE_NAMESPACE}/coolify-realtime"
 
 # Make sure coolify network exists
 # It is created when starting Coolify with docker compose
