@@ -2,9 +2,12 @@
 # Coolify Custom Deployment - All-in-One Script
 # Handles: Fresh Install | In-Place Upgrade | Migration | Rollback | Pre-Flight Check
 
-set -e
+set -eE
 set -u
 set -o pipefail
+
+# Enable command tracing for debugging (comment out in production)
+# set -x
 
 # ============================================
 # CONFIGURATION
@@ -31,17 +34,56 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ERROR HANDLING
 # ============================================
 
-trap 'error_handler $? $LINENO' ERR
+# Last command tracking for better error messages
+LAST_COMMAND=""
+CURRENT_STEP=""
+trap 'LAST_COMMAND=$BASH_COMMAND' DEBUG
+trap 'error_handler $? $LINENO "$LAST_COMMAND"' ERR
+trap 'exit_handler $?' EXIT
+
+exit_handler() {
+    local exit_code=$1
+
+    # Only show this for non-zero exits that weren't already handled by error_handler
+    if [ $exit_code -ne 0 ] && [ -z "${ERROR_HANDLED:-}" ]; then
+        echo ""
+        echo -e "${RED}Script terminated unexpectedly!${NC}"
+        if [ -n "$CURRENT_STEP" ]; then
+            echo "Was executing: $CURRENT_STEP"
+        fi
+        echo "Last command: $LAST_COMMAND"
+        echo "Exit code: $exit_code"
+    fi
+}
 
 error_handler() {
     local exit_code=$1
     local line_num=$2
+    local last_cmd="${3:-unknown command}"
+
+    # Mark error as handled to prevent duplicate messages
+    ERROR_HANDLED=true
 
     echo ""
     echo -e "${RED}=============================================="
     echo "  ERROR!"
     echo -e "==============================================${NC}"
-    echo "Error at line $line_num (exit code: $exit_code)"
+    if [ -n "$CURRENT_STEP" ]; then
+        echo "Failed step: $CURRENT_STEP"
+    fi
+    echo "Exit code: $exit_code"
+    echo "Line number: $line_num"
+    echo "Failed command: $last_cmd"
+    echo ""
+
+    # Show helpful context based on the command that failed
+    if [[ "$last_cmd" == *"curl"* ]]; then
+        echo -e "${YELLOW}Network error: Failed to download file${NC}"
+        echo "Check your internet connection and CDN URL"
+    elif [[ "$last_cmd" == *"docker"* ]]; then
+        echo -e "${YELLOW}Docker error: Command failed${NC}"
+        echo "Check Docker logs: docker logs coolify"
+    fi
     echo ""
 
     if [ "$OPERATION_STARTED" = true ] && [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
@@ -88,7 +130,8 @@ print_header() {
 }
 
 print_step() {
-    echo -e "${CYAN}[$1] $2${NC}"
+    CURRENT_STEP="[$1] $2"
+    echo -e "${CYAN}$CURRENT_STEP${NC}"
 }
 
 check_pass() {
