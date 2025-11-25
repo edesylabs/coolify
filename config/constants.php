@@ -13,6 +13,7 @@ return [
         'realtime_image' => env('REALTIME_IMAGE', env('REGISTRY_URL', 'ghcr.io').'/'.env('COOLIFY_IMAGE_NAMESPACE', 'edesylabs').'/coolify-realtime'),
         'is_windows_docker_desktop' => env('IS_WINDOWS_DOCKER_DESKTOP', false),
         'releases_url' => env('COOLIFY_RELEASES_URL', 'https://cdn.coolify.io/releases.json'),
+        'versions_url' => env('COOLIFY_VERSIONS_URL', env('COOLIFY_CDN', 'https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main').'/versions.json'),
     ],
 
     'urls' => [

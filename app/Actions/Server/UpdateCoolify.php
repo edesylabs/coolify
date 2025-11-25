@@ -52,12 +52,15 @@ class UpdateCoolify
     {
         PullHelperImageJob::dispatch($this->server);
 
-        $image = config('constants.coolify.registry_url').'/coollabsio/coolify:'.$this->latestVersion;
+        $registry = config('constants.coolify.registry_url');
+        $namespace = env('COOLIFY_IMAGE_NAMESPACE', 'coollabsio');
+        $image = "$registry/$namespace/coolify:".$this->latestVersion;
         instant_remote_process(["docker pull -q $image"], $this->server, false);
 
+        $cdn = env('COOLIFY_CDN', 'https://cdn.coollabs.io/coolify');
         remote_process([
-            'curl -fsSL https://cdn.coollabs.io/coolify/upgrade.sh -o /data/coolify/source/upgrade.sh',
-            "bash /data/coolify/source/upgrade.sh $this->latestVersion",
+            "curl -fsSL $cdn/upgrade.sh -o /data/coolify/source/upgrade.sh",
+            "bash /data/coolify/source/upgrade.sh $this->latestVersion $registry $namespace",
         ], $this->server);
     }
 }
