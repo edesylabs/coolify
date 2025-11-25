@@ -42,6 +42,7 @@
             domains: [],
             fqdnString: @entangle($modelBinding).live,
             nextId: 0,
+            syncTimeout: null,
 
             init() {
                 // Parse comma-separated string into array with unique IDs
@@ -71,19 +72,27 @@
             },
 
             syncToString() {
-                // Filter out empty values and join
-                const validDomains = this.domains
-                    .map(d => d.value.trim())
-                    .filter(d => d.length > 0);
-
-                // Check for duplicates and warn user
-                const uniqueDomains = [...new Set(validDomains)];
-                if (uniqueDomains.length !== validDomains.length) {
-                    // Duplicates found - remove them
-                    this.fqdnString = uniqueDomains.join(',');
-                } else {
-                    this.fqdnString = validDomains.join(',');
+                // Clear any pending sync
+                if (this.syncTimeout) {
+                    clearTimeout(this.syncTimeout);
                 }
+
+                // Debounce the sync to avoid updating on every keystroke
+                this.syncTimeout = setTimeout(() => {
+                    // Filter out empty values and join
+                    const validDomains = this.domains
+                        .map(d => d.value.trim())
+                        .filter(d => d.length > 0);
+
+                    // Check for duplicates and warn user
+                    const uniqueDomains = [...new Set(validDomains)];
+                    if (uniqueDomains.length !== validDomains.length) {
+                        // Duplicates found - remove them
+                        this.fqdnString = uniqueDomains.join(',');
+                    } else {
+                        this.fqdnString = validDomains.join(',');
+                    }
+                }, 500); // Wait 500ms after user stops typing
             },
 
             addDomain() {
@@ -103,7 +112,27 @@
                 if (this.domains.length === 0) {
                     this.domains = [{ id: this.nextId++, value: '' }];
                 }
-                this.syncToString();
+                // Sync immediately when removing (no debounce)
+                this.syncToStringImmediate();
+            },
+
+            syncToStringImmediate() {
+                // Clear any pending debounced sync
+                if (this.syncTimeout) {
+                    clearTimeout(this.syncTimeout);
+                }
+
+                // Sync immediately without debounce
+                const validDomains = this.domains
+                    .map(d => d.value.trim())
+                    .filter(d => d.length > 0);
+
+                const uniqueDomains = [...new Set(validDomains)];
+                if (uniqueDomains.length !== validDomains.length) {
+                    this.fqdnString = uniqueDomains.join(',');
+                } else {
+                    this.fqdnString = validDomains.join(',');
+                }
             },
 
             updateDomain(id, value) {
