@@ -501,16 +501,36 @@ update_custom_images() {
     mv docker-compose.prod.yml.new docker-compose.prod.yml
     echo -e "  ${GREEN}✓${NC} Compose files updated"
 
-    # Step 2: Pull latest images
-    print_step "2" "Pulling latest images..."
+    # Step 2: Update .env with required variables
+    print_step "2" "Updating environment configuration..."
+
+    update_env() {
+        local key=$1 value=$2
+        if grep -q "^${key}=" .env; then
+            sed -i "s|^${key}=.*|${key}=${value}|" .env
+        else
+            echo "${key}=${value}" >> .env
+        fi
+    }
+
+    update_env "REGISTRY_URL" "$COOLIFY_REGISTRY"
+    update_env "COOLIFY_IMAGE_NAMESPACE" "$COOLIFY_ORG"
+    grep -q "^COOLIFY_CDN=" .env || echo "COOLIFY_CDN=$COOLIFY_CDN" >> .env
+    grep -q "^HELPER_IMAGE=" .env || echo "HELPER_IMAGE=$COOLIFY_REGISTRY/$COOLIFY_ORG/coolify-helper" >> .env
+    grep -q "^REALTIME_IMAGE=" .env || echo "REALTIME_IMAGE=$COOLIFY_REGISTRY/$COOLIFY_ORG/coolify-realtime" >> .env
+
+    echo -e "  ${GREEN}✓${NC} Environment updated"
+
+    # Step 3: Pull latest images
+    print_step "3" "Pulling latest images..."
     if ! docker compose pull; then
         echo -e "${RED}✗ Failed to pull images${NC}"
         return 1
     fi
     echo -e "  ${GREEN}✓${NC} Images pulled"
 
-    # Step 3: Restart services
-    print_step "3" "Restarting services..."
+    # Step 4: Restart services
+    print_step "4" "Restarting services..."
     docker compose down
     docker compose up -d
     sleep 10
