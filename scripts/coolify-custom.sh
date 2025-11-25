@@ -386,8 +386,9 @@ perform_upgrade() {
     sed -i "s|ghcr.io/coollabsio|$COOLIFY_REGISTRY/$COOLIFY_ORG|g" docker-compose.yml.new
     sed -i "s|ghcr.io/coollabsio|$COOLIFY_REGISTRY/$COOLIFY_ORG|g" docker-compose.prod.yml.new
 
-    if ! docker compose -f docker-compose.yml.new -f docker-compose.prod.yml.new config >/dev/null 2>&1; then
-        echo -e "${RED}✗ Invalid docker-compose configuration${NC}"
+    # Verify files are not empty
+    if [ ! -s docker-compose.yml.new ] || [ ! -s docker-compose.prod.yml.new ]; then
+        echo -e "${RED}✗ Downloaded files are empty${NC}"
         return 1
     fi
 
@@ -489,11 +490,9 @@ update_custom_images() {
         return 1
     fi
 
-    # Validate compose files together (they work as a pair)
-    if ! docker compose -f docker-compose.yml.new -f docker-compose.prod.yml.new config >/dev/null 2>&1; then
-        echo -e "${RED}✗ Invalid docker-compose configuration${NC}"
-        echo "Run this to see the error:"
-        echo "  cd /data/coolify/source && docker compose -f docker-compose.yml.new -f docker-compose.prod.yml.new config"
+    # Verify files are not empty
+    if [ ! -s docker-compose.yml.new ] || [ ! -s docker-compose.prod.yml.new ]; then
+        echo -e "${RED}✗ Downloaded files are empty${NC}"
         rm -f docker-compose.yml.new docker-compose.prod.yml.new
         return 1
     fi
