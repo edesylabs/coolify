@@ -386,8 +386,8 @@ perform_upgrade() {
     sed -i "s|ghcr.io/coollabsio|$COOLIFY_REGISTRY/$COOLIFY_ORG|g" docker-compose.yml.new
     sed -i "s|ghcr.io/coollabsio|$COOLIFY_REGISTRY/$COOLIFY_ORG|g" docker-compose.prod.yml.new
 
-    if ! docker compose -f docker-compose.yml.new config >/dev/null 2>&1; then
-        echo -e "${RED}✗ Invalid docker-compose.yml configuration${NC}"
+    if ! docker compose -f docker-compose.yml.new -f docker-compose.prod.yml.new config >/dev/null 2>&1; then
+        echo -e "${RED}✗ Invalid docker-compose configuration${NC}"
         return 1
     fi
 
@@ -489,9 +489,11 @@ update_custom_images() {
         return 1
     fi
 
-    # Validate compose files
-    if ! docker compose -f docker-compose.yml.new config >/dev/null 2>&1; then
-        echo -e "${RED}✗ Invalid docker-compose.yml${NC}"
+    # Validate compose files together (they work as a pair)
+    if ! docker compose -f docker-compose.yml.new -f docker-compose.prod.yml.new config >/dev/null 2>&1; then
+        echo -e "${RED}✗ Invalid docker-compose configuration${NC}"
+        echo "Run this to see the error:"
+        echo "  cd /data/coolify/source && docker compose -f docker-compose.yml.new -f docker-compose.prod.yml.new config"
         rm -f docker-compose.yml.new docker-compose.prod.yml.new
         return 1
     fi
@@ -502,7 +504,10 @@ update_custom_images() {
 
     # Step 2: Pull latest images
     print_step "2" "Pulling latest images..."
-    docker compose pull
+    if ! docker compose pull; then
+        echo -e "${RED}✗ Failed to pull images${NC}"
+        return 1
+    fi
     echo -e "  ${GREEN}✓${NC} Images pulled"
 
     # Step 3: Restart services
