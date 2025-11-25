@@ -464,6 +464,66 @@ perform_fresh_install() {
 }
 
 # ============================================
+# UPDATE CUSTOM IMAGES FUNCTION
+# ============================================
+
+update_custom_images() {
+    print_header "Updating Custom Images"
+    echo ""
+
+    cd /data/coolify/source || {
+        echo -e "${RED}✗ Coolify source directory not found${NC}"
+        return 1
+    }
+
+    # Step 1: Download latest compose files
+    print_step "1" "Downloading latest docker-compose files..."
+
+    if ! curl -fsSL "$COOLIFY_CDN/docker-compose.yml" -o docker-compose.yml.new; then
+        echo -e "${RED}✗ Failed to download docker-compose.yml${NC}"
+        return 1
+    fi
+
+    if ! curl -fsSL "$COOLIFY_CDN/docker-compose.prod.yml" -o docker-compose.prod.yml.new; then
+        echo -e "${RED}✗ Failed to download docker-compose.prod.yml${NC}"
+        return 1
+    fi
+
+    # Validate compose files
+    if ! docker compose -f docker-compose.yml.new config >/dev/null 2>&1; then
+        echo -e "${RED}✗ Invalid docker-compose.yml${NC}"
+        rm -f docker-compose.yml.new docker-compose.prod.yml.new
+        return 1
+    fi
+
+    mv docker-compose.yml.new docker-compose.yml
+    mv docker-compose.prod.yml.new docker-compose.prod.yml
+    echo -e "  ${GREEN}✓${NC} Compose files updated"
+
+    # Step 2: Pull latest images
+    print_step "2" "Pulling latest images..."
+    docker compose pull
+    echo -e "  ${GREEN}✓${NC} Images pulled"
+
+    # Step 3: Restart services
+    print_step "3" "Restarting services..."
+    docker compose down
+    docker compose up -d
+    sleep 10
+
+    # Step 4: Verify
+    if docker ps --format '{{.Names}}' | grep -q '^coolify$'; then
+        echo -e "  ${GREEN}✓${NC} Services restarted successfully"
+        echo ""
+        echo -e "${GREEN}✓ Update complete!${NC}"
+    else
+        echo -e "  ${RED}✗${NC} Services failed to start"
+        echo "Check logs: docker logs coolify"
+        return 1
+    fi
+}
+
+# ============================================
 # ROLLBACK FUNCTION
 # ============================================
 
@@ -628,9 +688,7 @@ handle_choice() {
         "already_custom")
             case $choice in
                 1)
-                    cd /data/coolify/source
-                    docker compose pull && docker compose up -d
-                    echo -e "${GREEN}✓ Images updated${NC}"
+                    update_custom_images
                     ;;
                 2)
                     perform_rollback
