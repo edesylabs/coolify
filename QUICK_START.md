@@ -42,7 +42,7 @@ jobs:
       matrix:
         include:
           - name: coolify
-            dockerfile: ./docker/prod/Dockerfile
+            dockerfile: ./docker/production/Dockerfile
             context: .
           - name: coolify-helper
             dockerfile: ./docker/coolify-helper/Dockerfile
@@ -95,7 +95,7 @@ git push origin main
 docker login ghcr.io -u YOUR_GITHUB_USERNAME
 
 # Build and push images
-docker build -t ghcr.io/edesylabs/coolify:latest -f docker/prod/Dockerfile .
+docker build -t ghcr.io/edesylabs/coolify:latest -f docker/production/Dockerfile .
 docker push ghcr.io/edesylabs/coolify:latest
 
 docker build -t ghcr.io/edesylabs/coolify-helper:latest docker/coolify-helper/
