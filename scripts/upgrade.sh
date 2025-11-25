@@ -58,6 +58,16 @@ update_env_var "COOLIFY_CDN" "$CDN"
 update_env_var "HELPER_IMAGE" "${REGISTRY_URL}/${IMAGE_NAMESPACE}/coolify-helper"
 update_env_var "REALTIME_IMAGE" "${REGISTRY_URL}/${IMAGE_NAMESPACE}/coolify-realtime"
 
+# Authenticate with GitHub Container Registry if token is provided
+if grep -q "^GITHUB_TOKEN=" "$ENV_FILE"; then
+    GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$ENV_FILE" | cut -d'=' -f2-)
+    if [ -n "$GITHUB_TOKEN" ]; then
+        echo "Authenticating with GitHub Container Registry..." >>"$LOGFILE"
+        echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$IMAGE_NAMESPACE" --password-stdin >>"$LOGFILE" 2>&1
+        echo "GitHub Container Registry authentication complete" >>"$LOGFILE"
+    fi
+fi
+
 # Make sure coolify network exists
 # It is created when starting Coolify with docker compose
 if ! docker network inspect coolify >/dev/null 2>&1; then

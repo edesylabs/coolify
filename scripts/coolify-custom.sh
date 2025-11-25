@@ -523,6 +523,19 @@ update_custom_images() {
 
     echo -e "  ${GREEN}✓${NC} Environment updated"
 
+    # Authenticate with GitHub Container Registry if token is provided
+    if grep -q "^GITHUB_TOKEN=" .env; then
+        GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" .env | cut -d'=' -f2-)
+        if [ -n "$GITHUB_TOKEN" ]; then
+            echo "  Authenticating with GitHub Container Registry..."
+            if echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$COOLIFY_ORG" --password-stdin >/dev/null 2>&1; then
+                echo -e "  ${GREEN}✓${NC} GitHub authentication successful"
+            else
+                echo -e "  ${YELLOW}⚠${NC} GitHub authentication failed (continuing anyway)"
+            fi
+        fi
+    fi
+
     # Step 3: Pull latest images
     print_step "3" "Pulling latest images..."
     if ! docker compose pull; then
