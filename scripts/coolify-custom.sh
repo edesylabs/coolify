@@ -69,7 +69,7 @@ automatic_rollback() {
     docker compose up -d
     sleep 15
 
-    if docker ps | grep -q coolify; then
+    if docker ps --format '{{.Names}}' | grep -q '^coolify$'; then
         echo -e "${GREEN}✓ Rollback successful. System restored.${NC}"
     else
         echo -e "${RED}✗ Rollback failed. Manual recovery needed.${NC}"
@@ -178,11 +178,23 @@ run_preflight_checks() {
     fi
 
     if [ "$check_type" = "upgrade" ]; then
-        # Coolify running
-        if docker ps | grep -q coolify 2>/dev/null; then
+        # Coolify running - check for main container specifically
+        if docker ps --format '{{.Names}}' | grep -q '^coolify$' 2>/dev/null; then
             check_pass "Coolify running"
         else
-            check_fail "Coolify not running" || ((errors++))
+            # Check if container exists but is stopped
+            if docker ps -a --format '{{.Names}}' | grep -q '^coolify$' 2>/dev/null; then
+                check_fail "Coolify container exists but is not running" || ((errors++))
+                echo -e "  ${YELLOW}Try: cd /data/coolify/source && docker compose up -d${NC}"
+            else
+                check_fail "Coolify container not found" || ((errors++))
+                echo -e "  ${YELLOW}Expected container name: coolify${NC}"
+                # Show what coolify containers are actually running for diagnostics
+                local running_coolify=$(docker ps --format '{{.Names}}' | grep coolify | head -3 | tr '\n' ' ')
+                if [ -n "$running_coolify" ]; then
+                    echo -e "  ${YELLOW}Found running: $running_coolify${NC}"
+                fi
+            fi
         fi
 
         # Database
@@ -338,8 +350,10 @@ perform_upgrade() {
 
     # Step 7: Verify
     print_step "7" "Verifying deployment..."
-    if ! docker ps | grep -q coolify; then
-        echo -e "${RED}✗ Containers failed to start${NC}"
+    if ! docker ps --format '{{.Names}}' | grep -q '^coolify$'; then
+        echo -e "${RED}✗ Main Coolify container failed to start${NC}"
+        echo "Running containers:"
+        docker ps --format '{{.Names}}' | grep coolify || echo "  None found"
         return 1
     fi
 
@@ -442,10 +456,10 @@ perform_rollback() {
     docker compose up -d
     sleep 20
 
-    if docker ps | grep -q coolify; then
+    if docker ps --format '{{.Names}}' | grep -q '^coolify$'; then
         echo -e "${GREEN}✓ Rollback successful${NC}"
     else
-        echo -e "${RED}✗ Rollback failed${NC}"
+        echo -e "${RED}✗ Rollback failed - Coolify container not running${NC}"
         return 1
     fi
 }
