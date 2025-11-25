@@ -364,6 +364,7 @@ perform_upgrade() {
 
     update_env "REGISTRY_URL" "$COOLIFY_REGISTRY"
     update_env "COOLIFY_IMAGE_NAMESPACE" "$COOLIFY_ORG"
+    update_env "COMPOSE_FILE" "docker-compose.yml:docker-compose.prod.yml"
     grep -q "^COOLIFY_CDN=" .env || echo "COOLIFY_CDN=$COOLIFY_CDN" >> .env
     grep -q "^HELPER_IMAGE=" .env || echo "HELPER_IMAGE=$COOLIFY_REGISTRY/$COOLIFY_ORG/coolify-helper" >> .env
     grep -q "^REALTIME_IMAGE=" .env || echo "REALTIME_IMAGE=$COOLIFY_REGISTRY/$COOLIFY_ORG/coolify-realtime" >> .env
@@ -515,6 +516,7 @@ update_custom_images() {
 
     update_env "REGISTRY_URL" "$COOLIFY_REGISTRY"
     update_env "COOLIFY_IMAGE_NAMESPACE" "$COOLIFY_ORG"
+    update_env "COMPOSE_FILE" "docker-compose.yml:docker-compose.prod.yml"
     grep -q "^COOLIFY_CDN=" .env || echo "COOLIFY_CDN=$COOLIFY_CDN" >> .env
     grep -q "^HELPER_IMAGE=" .env || echo "HELPER_IMAGE=$COOLIFY_REGISTRY/$COOLIFY_ORG/coolify-helper" >> .env
     grep -q "^REALTIME_IMAGE=" .env || echo "REALTIME_IMAGE=$COOLIFY_REGISTRY/$COOLIFY_ORG/coolify-realtime" >> .env
