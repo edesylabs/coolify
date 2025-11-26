@@ -4,13 +4,17 @@ namespace App\Notifications;
 
 use App\Notifications\Channels\DiscordChannel;
 use App\Notifications\Channels\EmailChannel;
+use App\Notifications\Channels\GoogleChatChannel;
 use App\Notifications\Channels\PushoverChannel;
 use App\Notifications\Channels\SlackChannel;
+use App\Notifications\Channels\TeamsChannel;
 use App\Notifications\Channels\TelegramChannel;
 use App\Notifications\Channels\WebhookChannel;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -36,6 +40,8 @@ class Test extends Notification implements ShouldQueue
                 'discord' => [DiscordChannel::class],
                 'telegram' => [TelegramChannel::class],
                 'slack' => [SlackChannel::class],
+                'teams' => [TeamsChannel::class],
+                'google_chat' => [GoogleChatChannel::class],
                 'pushover' => [PushoverChannel::class],
                 'webhook' => [WebhookChannel::class],
                 default => [],
@@ -111,6 +117,32 @@ class Test extends Notification implements ShouldQueue
             title: 'Test Slack Notification',
             description: 'This is a test Slack notification from Coolify.'
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $message = new TeamsMessage(
+            title: 'Test Teams Notification',
+            description: 'This is a test Microsoft Teams notification from Coolify.',
+            color: TeamsMessage::infoColor()
+        );
+
+        $message->addButton('Go to Dashboard', base_url());
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $message = new GoogleChatMessage(
+            title: 'Test Google Chat Notification',
+            description: 'This is a test Google Chat notification from Coolify.',
+            color: GoogleChatMessage::infoColor()
+        );
+
+        $message->addButton('Go to Dashboard', base_url());
+
+        return $message;
     }
 
     public function toWebhook(): array

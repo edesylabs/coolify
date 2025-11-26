@@ -6,8 +6,10 @@ use App\Models\Application;
 use App\Models\ApplicationPreview;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class DeploymentFailed extends CustomEmailNotification
@@ -184,6 +186,66 @@ class DeploymentFailed extends CustomEmailNotification
             description: $description,
             color: SlackMessage::errorColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        if ($this->preview) {
+            $title = "Pull request #{$this->preview->pull_request_id} deployment failed";
+            $description = "Pull request deployment failed for {$this->application_name}";
+            if ($this->preview->fqdn) {
+                $description .= "\n\nPreview URL: {$this->preview->fqdn}";
+            }
+        } else {
+            $title = 'Deployment failed';
+            $description = "Deployment failed for {$this->application_name}";
+            if ($this->fqdn) {
+                $description .= "\n\nApplication URL: {$this->fqdn}";
+            }
+        }
+
+        $description .= "\n\nProject: ".data_get($this->application, 'environment.project.name');
+        $description .= "\nEnvironment: {$this->environment_name}";
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::errorColor()
+        );
+
+        $message->addButton('Deployment Logs', $this->deployment_url);
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        if ($this->preview) {
+            $title = "Pull request #{$this->preview->pull_request_id} deployment failed";
+            $description = "Pull request deployment failed for {$this->application_name}";
+            if ($this->preview->fqdn) {
+                $description .= "\n\nPreview URL: {$this->preview->fqdn}";
+            }
+        } else {
+            $title = 'Deployment failed';
+            $description = "Deployment failed for {$this->application_name}";
+            if ($this->fqdn) {
+                $description .= "\n\nApplication URL: {$this->fqdn}";
+            }
+        }
+
+        $description .= "\n\nProject: ".data_get($this->application, 'environment.project.name');
+        $description .= "\nEnvironment: {$this->environment_name}";
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::errorColor()
+        );
+
+        $message->addButton('Deployment Logs', $this->deployment_url);
+
+        return $message;
     }
 
     public function toWebhook(): array

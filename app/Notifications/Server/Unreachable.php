@@ -5,8 +5,10 @@ namespace App\Notifications\Server;
 use App\Models\Server;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class Unreachable extends CustomEmailNotification
@@ -81,6 +83,44 @@ class Unreachable extends CustomEmailNotification
             description: $description,
             color: SlackMessage::errorColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $description = "Your server '{$this->server->name}' is unreachable.\n";
+        $description .= "All automations & integrations are turned off!\n\n";
+        $description .= 'IMPORTANT: We automatically try to revive your server and turn on all automations & integrations.';
+
+        $url = base_url().'/server/'.$this->server->uuid;
+
+        $message = new TeamsMessage(
+            title: 'Server unreachable',
+            description: $description,
+            color: TeamsMessage::errorColor()
+        );
+
+        $message->addButton('View Server', $url);
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $description = "Your server '{$this->server->name}' is unreachable.\n";
+        $description .= "All automations & integrations are turned off!\n\n";
+        $description .= 'IMPORTANT: We automatically try to revive your server and turn on all automations & integrations.';
+
+        $url = base_url().'/server/'.$this->server->uuid;
+
+        $message = new GoogleChatMessage(
+            title: 'Server unreachable',
+            description: $description,
+            color: GoogleChatMessage::errorColor()
+        );
+
+        $message->addButton('View Server', $url);
+
+        return $message;
     }
 
     public function toWebhook(): array

@@ -5,8 +5,10 @@ namespace App\Notifications\ScheduledTask;
 use App\Models\ScheduledTask;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class TaskFailed extends CustomEmailNotification
@@ -113,6 +115,50 @@ class TaskFailed extends CustomEmailNotification
             description: $description,
             color: SlackMessage::errorColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $title = 'Scheduled task failed';
+        $description = "Scheduled task ({$this->task->name}) failed.";
+
+        if ($this->output) {
+            $description .= "\n\nError Output: {$this->output}";
+        }
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::errorColor()
+        );
+
+        if ($this->url) {
+            $message->addButton('View Task', $this->url);
+        }
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $title = 'Scheduled task failed';
+        $description = "Scheduled task ({$this->task->name}) failed.";
+
+        if ($this->output) {
+            $description .= "\n\nError Output: {$this->output}";
+        }
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::errorColor()
+        );
+
+        if ($this->url) {
+            $message->addButton('View Task', $this->url);
+        }
+
+        return $message;
     }
 
     public function toWebhook(): array

@@ -3,8 +3,10 @@
 namespace App\Notifications\Internal;
 
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
@@ -56,6 +58,24 @@ class GeneralNotification extends Notification implements ShouldQueue
             title: 'Coolify: General Notification',
             description: $this->message,
             color: SlackMessage::infoColor(),
+        );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        return new TeamsMessage(
+            title: 'General Notification',
+            description: $this->message,
+            color: TeamsMessage::infoColor()
+        );
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        return new GoogleChatMessage(
+            title: 'General Notification',
+            description: $this->message,
+            color: GoogleChatMessage::infoColor()
         );
     }
 }

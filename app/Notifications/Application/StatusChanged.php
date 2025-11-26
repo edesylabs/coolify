@@ -5,8 +5,10 @@ namespace App\Notifications\Application;
 use App\Models\Application;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class StatusChanged extends CustomEmailNotification
@@ -112,6 +114,42 @@ class StatusChanged extends CustomEmailNotification
             description: $description,
             color: SlackMessage::errorColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $title = 'Application stopped';
+        $description = "{$this->resource_name} has been stopped";
+        $description .= "\n\nProject: ".data_get($this->resource, 'environment.project.name');
+        $description .= "\nEnvironment: {$this->environment_name}";
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::errorColor()
+        );
+
+        $message->addButton('Open Application', $this->resource_url);
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $title = 'Application stopped';
+        $description = "{$this->resource_name} has been stopped";
+        $description .= "\n\nProject: ".data_get($this->resource, 'environment.project.name');
+        $description .= "\nEnvironment: {$this->environment_name}";
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::errorColor()
+        );
+
+        $message->addButton('Open Application', $this->resource_url);
+
+        return $message;
     }
 
     public function toWebhook(): array

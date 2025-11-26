@@ -5,8 +5,10 @@ namespace App\Notifications\Database;
 use App\Models\ScheduledDatabaseBackup;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class BackupFailed extends CustomEmailNotification
@@ -87,6 +89,48 @@ class BackupFailed extends CustomEmailNotification
             description: $description,
             color: SlackMessage::errorColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $title = 'Database backup failed';
+        $description = "Database backup for {$this->name} (db:{$this->database_name}) has FAILED.";
+
+        $description .= "\n\nFrequency: {$this->frequency}";
+        $description .= "\n\nError Output: {$this->output}";
+
+        $url = base_url().'/project/'.data_get($this->database, 'environment.project.uuid').'/environment/'.data_get($this->database, 'environment.uuid').'/database/'.$this->database->uuid;
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::errorColor()
+        );
+
+        $message->addButton('View Database', $url);
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $title = 'Database backup failed';
+        $description = "Database backup for {$this->name} (db:{$this->database_name}) has FAILED.";
+
+        $description .= "\n\nFrequency: {$this->frequency}";
+        $description .= "\n\nError Output: {$this->output}";
+
+        $url = base_url().'/project/'.data_get($this->database, 'environment.project.uuid').'/environment/'.data_get($this->database, 'environment.uuid').'/database/'.$this->database->uuid;
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::errorColor()
+        );
+
+        $message->addButton('View Database', $url);
+
+        return $message;
     }
 
     public function toWebhook(): array

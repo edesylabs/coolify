@@ -5,8 +5,10 @@ namespace App\Notifications\Server;
 use App\Models\Server;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class ForceEnabled extends CustomEmailNotification
@@ -63,6 +65,24 @@ class ForceEnabled extends CustomEmailNotification
             title: 'Server enabled',
             description: "Server '{$this->server->name}' enabled again!",
             color: SlackMessage::successColor()
+        );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        return new TeamsMessage(
+            title: 'Server enabled',
+            description: "Server '{$this->server->name}' enabled again!",
+            color: TeamsMessage::successColor()
+        );
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        return new GoogleChatMessage(
+            title: 'Server enabled',
+            description: "Server '{$this->server->name}' enabled again!",
+            color: GoogleChatMessage::successColor()
         );
     }
 }

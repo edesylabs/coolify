@@ -4,8 +4,10 @@ namespace App\Traits;
 
 use App\Notifications\Channels\DiscordChannel;
 use App\Notifications\Channels\EmailChannel;
+use App\Notifications\Channels\GoogleChatChannel;
 use App\Notifications\Channels\PushoverChannel;
 use App\Notifications\Channels\SlackChannel;
+use App\Notifications\Channels\TeamsChannel;
 use App\Notifications\Channels\TelegramChannel;
 use App\Notifications\Channels\WebhookChannel;
 use Illuminate\Database\Eloquent\Model;
@@ -33,6 +35,8 @@ trait HasNotificationSettings
             'slack' => $this->slackNotificationSettings,
             'pushover' => $this->pushoverNotificationSettings,
             'webhook' => $this->webhookNotificationSettings,
+            'teams' => $this->teamsNotificationSettings,
+            'google_chat' => $this->googleChatNotificationSettings,
             default => null,
         };
     }
@@ -81,6 +85,8 @@ trait HasNotificationSettings
             'slack' => SlackChannel::class,
             'pushover' => PushoverChannel::class,
             'webhook' => WebhookChannel::class,
+            'teams' => TeamsChannel::class,
+            'google_chat' => GoogleChatChannel::class,
         ];
 
         if ($event === 'general') {

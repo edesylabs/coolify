@@ -5,8 +5,10 @@ namespace App\Notifications\ScheduledTask;
 use App\Models\ScheduledTask;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class TaskSuccess extends CustomEmailNotification
@@ -104,6 +106,42 @@ class TaskSuccess extends CustomEmailNotification
             description: $description,
             color: SlackMessage::successColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $title = 'Scheduled task succeeded';
+        $description = "Scheduled task ({$this->task->name}) succeeded.";
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::successColor()
+        );
+
+        if ($this->url) {
+            $message->addButton('View Task', $this->url);
+        }
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $title = 'Scheduled task succeeded';
+        $description = "Scheduled task ({$this->task->name}) succeeded.";
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::successColor()
+        );
+
+        if ($this->url) {
+            $message->addButton('View Task', $this->url);
+        }
+
+        return $message;
     }
 
     public function toWebhook(): array

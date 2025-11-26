@@ -5,8 +5,10 @@ namespace App\Models;
 use App\Events\ServerReachabilityChanged;
 use App\Notifications\Channels\SendsDiscord;
 use App\Notifications\Channels\SendsEmail;
+use App\Notifications\Channels\SendsGoogleChat;
 use App\Notifications\Channels\SendsPushover;
 use App\Notifications\Channels\SendsSlack;
+use App\Notifications\Channels\SendsTeams;
 use App\Traits\HasNotificationSettings;
 use App\Traits\HasSafeStringAttribute;
 use Illuminate\Database\Eloquent\Casts\Attribute;
@@ -36,7 +38,7 @@ use OpenApi\Attributes as OA;
     ]
 )]
 
-class Team extends Model implements SendsDiscord, SendsEmail, SendsPushover, SendsSlack
+class Team extends Model implements SendsDiscord, SendsEmail, SendsGoogleChat, SendsPushover, SendsSlack, SendsTeams
 {
     use HasFactory, HasNotificationSettings, HasSafeStringAttribute, Notifiable;
 
@@ -55,6 +57,8 @@ class Team extends Model implements SendsDiscord, SendsEmail, SendsPushover, Sen
             $team->telegramNotificationSettings()->create();
             $team->pushoverNotificationSettings()->create();
             $team->webhookNotificationSettings()->create();
+            $team->teamsNotificationSettings()->create();
+            $team->googleChatNotificationSettings()->create();
         });
 
         static::saving(function ($team) {
@@ -158,6 +162,16 @@ class Team extends Model implements SendsDiscord, SendsEmail, SendsPushover, Sen
         return data_get($this, 'slack_webhook_url', null);
     }
 
+    public function routeNotificationForTeams()
+    {
+        return data_get($this, 'teams_webhook_url', null);
+    }
+
+    public function routeNotificationForGoogleChat()
+    {
+        return data_get($this, 'google_chat_webhook_url', null);
+    }
+
     public function routeNotificationForPushover()
     {
         return [
@@ -189,7 +203,9 @@ class Team extends Model implements SendsDiscord, SendsEmail, SendsPushover, Sen
             $this->getNotificationSettings('discord')?->isEnabled() ||
             $this->getNotificationSettings('slack')?->isEnabled() ||
             $this->getNotificationSettings('telegram')?->isEnabled() ||
-            $this->getNotificationSettings('pushover')?->isEnabled();
+            $this->getNotificationSettings('pushover')?->isEnabled() ||
+            $this->getNotificationSettings('teams')?->isEnabled() ||
+            $this->getNotificationSettings('google_chat')?->isEnabled();
     }
 
     public function subscriptionEnded()
@@ -317,5 +333,15 @@ class Team extends Model implements SendsDiscord, SendsEmail, SendsPushover, Sen
     public function webhookNotificationSettings()
     {
         return $this->hasOne(WebhookNotificationSettings::class);
+    }
+
+    public function teamsNotificationSettings()
+    {
+        return $this->hasOne(TeamsNotificationSettings::class);
+    }
+
+    public function googleChatNotificationSettings()
+    {
+        return $this->hasOne(GoogleChatNotificationSettings::class);
     }
 }

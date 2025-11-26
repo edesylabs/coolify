@@ -5,8 +5,10 @@ namespace App\Notifications\Server;
 use App\Models\Server;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class DockerCleanupFailed extends CustomEmailNotification
@@ -65,6 +67,36 @@ class DockerCleanupFailed extends CustomEmailNotification
             description: "Docker cleanup job failed on '{$this->server->name}'!\n\n{$this->message}",
             color: SlackMessage::errorColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $url = base_url().'/server/'.$this->server->uuid;
+
+        $message = new TeamsMessage(
+            title: '[ACTION REQUIRED] Docker cleanup job failed',
+            description: "Docker cleanup job failed on '{$this->server->name}'!\n\n{$this->message}",
+            color: TeamsMessage::errorColor()
+        );
+
+        $message->addButton('View Server', $url);
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $url = base_url().'/server/'.$this->server->uuid;
+
+        $message = new GoogleChatMessage(
+            title: '[ACTION REQUIRED] Docker cleanup job failed',
+            description: "Docker cleanup job failed on '{$this->server->name}'!\n\n{$this->message}",
+            color: GoogleChatMessage::errorColor()
+        );
+
+        $message->addButton('View Server', $url);
+
+        return $message;
     }
 
     public function toWebhook(): array
