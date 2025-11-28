@@ -1,6 +1,16 @@
-name: Coolify Realtime
+name: Coolify Realtime [DISABLED - Use release.yml instead]
+
+# DISABLED: This workflow is for the original Coolify repository.
+# For this fork, use release.yml which handles all builds automatically.
 
 on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'This workflow is disabled. Use release.yml instead.'
+        required: false
+
+_disabled_on:
   push:
     branches: [ "v4.x" ]
     paths:

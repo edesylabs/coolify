@@ -1,6 +1,22 @@
-name: Production Build (v4)
+name: Production Build (v4) [DISABLED - Use release.yml instead]
+
+# DISABLED: This workflow is for the original Coolify repository.
+# For this fork, use release.yml which handles all builds automatically.
+# To re-enable, uncomment the 'on:' section below.
+
+# on:
+#   push:
+#     branches: ["v4.x"]
+#     paths-ignore:
 
 on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'This workflow is disabled. Use release.yml instead.'
+        required: false
+
+_disabled_on:
   push:
     branches: ["v4.x"]
     paths-ignore:
