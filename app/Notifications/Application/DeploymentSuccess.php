@@ -6,8 +6,10 @@ use App\Models\Application;
 use App\Models\ApplicationPreview;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class DeploymentSuccess extends CustomEmailNotification
@@ -204,6 +206,72 @@ class DeploymentSuccess extends CustomEmailNotification
             description: $description,
             color: SlackMessage::successColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        if ($this->preview) {
+            $title = "Pull request #{$this->preview->pull_request_id} successfully deployed";
+            $description = "New version successfully deployed for {$this->application_name}";
+            if ($this->preview->fqdn) {
+                $description .= "\n\nPreview URL: {$this->preview->fqdn}";
+            }
+        } else {
+            $title = 'New version successfully deployed';
+            $description = "New version successfully deployed for {$this->application_name}";
+            if ($this->fqdn) {
+                $description .= "\n\nApplication URL: {$this->fqdn}";
+            }
+        }
+
+        $description .= "\n\nProject: ".data_get($this->application, 'environment.project.name');
+        $description .= "\nEnvironment: {$this->environment_name}";
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::successColor()
+        );
+
+        if ($this->fqdn) {
+            $message->addButton('Open Application', $this->fqdn);
+        }
+        $message->addButton('Deployment Logs', $this->deployment_url);
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        if ($this->preview) {
+            $title = "Pull request #{$this->preview->pull_request_id} successfully deployed";
+            $description = "New version successfully deployed for {$this->application_name}";
+            if ($this->preview->fqdn) {
+                $description .= "\n\nPreview URL: {$this->preview->fqdn}";
+            }
+        } else {
+            $title = 'New version successfully deployed';
+            $description = "New version successfully deployed for {$this->application_name}";
+            if ($this->fqdn) {
+                $description .= "\n\nApplication URL: {$this->fqdn}";
+            }
+        }
+
+        $description .= "\n\nProject: ".data_get($this->application, 'environment.project.name');
+        $description .= "\nEnvironment: {$this->environment_name}";
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::successColor()
+        );
+
+        if ($this->fqdn) {
+            $message->addButton('Open Application', $this->fqdn);
+        }
+        $message->addButton('Deployment Logs', $this->deployment_url);
+
+        return $message;
     }
 
     public function toWebhook(): array

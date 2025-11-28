@@ -5,8 +5,10 @@ namespace App\Notifications\Database;
 use App\Models\ScheduledDatabaseBackup;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class BackupSuccessWithS3Warning extends CustomEmailNotification
@@ -112,6 +114,56 @@ class BackupSuccessWithS3Warning extends CustomEmailNotification
             description: $description,
             color: SlackMessage::warningColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $title = 'Database backup succeeded locally, S3 upload failed';
+        $description = "Database backup for {$this->name} (db:{$this->database_name}) was created successfully on local storage, but failed to upload to S3.";
+
+        $description .= "\n\nFrequency: {$this->frequency}";
+        $description .= "\n\nS3 Error: {$this->s3_error}";
+
+        $url = base_url().'/project/'.data_get($this->database, 'environment.project.uuid').'/environment/'.data_get($this->database, 'environment.uuid').'/database/'.$this->database->uuid;
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::warningColor()
+        );
+
+        $message->addButton('View Database', $url);
+
+        if ($this->s3_storage_url) {
+            $message->addButton('Check S3 Configuration', $this->s3_storage_url);
+        }
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $title = 'Database backup succeeded locally, S3 upload failed';
+        $description = "Database backup for {$this->name} (db:{$this->database_name}) was created successfully on local storage, but failed to upload to S3.";
+
+        $description .= "\n\nFrequency: {$this->frequency}";
+        $description .= "\n\nS3 Error: {$this->s3_error}";
+
+        $url = base_url().'/project/'.data_get($this->database, 'environment.project.uuid').'/environment/'.data_get($this->database, 'environment.uuid').'/database/'.$this->database->uuid;
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::warningColor()
+        );
+
+        $message->addButton('View Database', $url);
+
+        if ($this->s3_storage_url) {
+            $message->addButton('Check S3 Configuration', $this->s3_storage_url);
+        }
+
+        return $message;
     }
 
     public function toWebhook(): array

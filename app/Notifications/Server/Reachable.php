@@ -5,8 +5,10 @@ namespace App\Notifications\Server;
 use App\Models\Server;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class Reachable extends CustomEmailNotification
@@ -73,6 +75,36 @@ class Reachable extends CustomEmailNotification
             description: "Server '{$this->server->name}' revived.\nAll automations & integrations are turned on again!",
             color: SlackMessage::successColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $url = base_url().'/server/'.$this->server->uuid;
+
+        $message = new TeamsMessage(
+            title: 'Server revived',
+            description: "Server '{$this->server->name}' revived.\n\nAll automations & integrations are turned on again!",
+            color: TeamsMessage::successColor()
+        );
+
+        $message->addButton('View Server', $url);
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $url = base_url().'/server/'.$this->server->uuid;
+
+        $message = new GoogleChatMessage(
+            title: 'Server revived',
+            description: "Server '{$this->server->name}' revived.\n\nAll automations & integrations are turned on again!",
+            color: GoogleChatMessage::successColor()
+        );
+
+        $message->addButton('View Server', $url);
+
+        return $message;
     }
 
     public function toWebhook(): array

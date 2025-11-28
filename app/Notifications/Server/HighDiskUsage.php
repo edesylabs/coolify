@@ -5,8 +5,10 @@ namespace App\Notifications\Server;
 use App\Models\Server;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class HighDiskUsage extends CustomEmailNotification
@@ -87,6 +89,44 @@ class HighDiskUsage extends CustomEmailNotification
             description: $description,
             color: SlackMessage::errorColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $description = "Server '{$this->server->name}' high disk usage detected!\n\n";
+        $description .= "Disk usage: {$this->disk_usage}%\n";
+        $description .= "Threshold: {$this->server_disk_usage_notification_threshold}%\n\n";
+        $description .= 'Please cleanup your disk to prevent data-loss.';
+
+        $message = new TeamsMessage(
+            title: 'High disk usage detected',
+            description: $description,
+            color: TeamsMessage::errorColor()
+        );
+
+        $message->addButton('View Server', base_url().'/server/'.$this->server->uuid.'#advanced');
+        $message->addButton('Cleanup Tips', 'https://coolify.io/docs/knowledge-base/server/automated-cleanup');
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $description = "Server '{$this->server->name}' high disk usage detected!\n\n";
+        $description .= "Disk usage: {$this->disk_usage}%\n";
+        $description .= "Threshold: {$this->server_disk_usage_notification_threshold}%\n\n";
+        $description .= 'Please cleanup your disk to prevent data-loss.';
+
+        $message = new GoogleChatMessage(
+            title: 'High disk usage detected',
+            description: $description,
+            color: GoogleChatMessage::errorColor()
+        );
+
+        $message->addButton('View Server', base_url().'/server/'.$this->server->uuid.'#advanced');
+        $message->addButton('Cleanup Tips', 'https://coolify.io/docs/knowledge-base/server/automated-cleanup');
+
+        return $message;
     }
 
     public function toWebhook(): array

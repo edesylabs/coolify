@@ -5,8 +5,10 @@ namespace App\Notifications\Server;
 use App\Models\Server;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class ForceDisabled extends CustomEmailNotification
@@ -73,5 +75,39 @@ class ForceDisabled extends CustomEmailNotification
             description: $description,
             color: SlackMessage::errorColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $description = "Server ({$this->server->name}) disabled because it is not paid!\n";
+        $description .= "All automations and integrations are stopped.\n\n";
+        $description .= 'Please update your subscription to enable the server again.';
+
+        $message = new TeamsMessage(
+            title: 'Server disabled',
+            description: $description,
+            color: TeamsMessage::errorColor()
+        );
+
+        $message->addButton('Update Subscription', 'https://app.coolify.io/subscriptions');
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $description = "Server ({$this->server->name}) disabled because it is not paid!\n";
+        $description .= "All automations and integrations are stopped.\n\n";
+        $description .= 'Please update your subscription to enable the server again.';
+
+        $message = new GoogleChatMessage(
+            title: 'Server disabled',
+            description: $description,
+            color: GoogleChatMessage::errorColor()
+        );
+
+        $message->addButton('Update Subscription', 'https://app.coolify.io/subscriptions');
+
+        return $message;
     }
 }

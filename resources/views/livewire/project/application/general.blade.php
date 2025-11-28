@@ -47,11 +47,11 @@
                             @foreach (data_get($parsedServices, 'services') as $serviceName => $service)
                                 @if (!isDatabaseImage(data_get($service, 'image')))
                                     <div class="flex items-end gap-2">
-                                        <x-forms.input
-                                            helper="You can specify one domain with path or more with comma. You can specify a port to bind the domain to.<br><br><span class='text-helper'>Example</span><br>- http://app.coolify.io,https://cloud.coolify.io/dashboard<br>- http://app.coolify.io/api/v3<br>- http://app.coolify.io:3000 -> app.coolify.io will point to port 3000 inside the container. "
+                                        <x-forms.domain-input
+                                            helper="You can specify one domain with path or more. You can specify a port to bind the domain to.<br><br><span class='text-helper'>Example</span><br>- http://app.coolify.io,https://cloud.coolify.io/dashboard<br>- http://app.coolify.io/api/v3<br>- http://app.coolify.io:3000 -> app.coolify.io will point to port 3000 inside the container. "
                                             label="Domains for {{ $serviceName }}"
-                                            id="parsedServiceDomains.{{ str($serviceName)->replace('-', '_')->replace('.', '_') }}.domain"
-                                            x-bind:disabled="shouldDisable()"></x-forms.input>
+                                            wire:model="parsedServiceDomains.{{ str($serviceName)->replace('-', '_')->replace('.', '_') }}.domain"
+                                            x-bind:disabled="shouldDisable()" />
                                         @can('update', $application)
                                             <x-forms.button wire:click="generateDomain('{{ $serviceName }}')">Generate
                                                 Domain</x-forms.button>

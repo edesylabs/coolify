@@ -5,8 +5,10 @@ namespace App\Notifications\Database;
 use App\Models\ScheduledDatabaseBackup;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class BackupSuccess extends CustomEmailNotification
@@ -84,6 +86,46 @@ class BackupSuccess extends CustomEmailNotification
             description: $description,
             color: SlackMessage::successColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $title = 'Database backup successful';
+        $description = "Database backup for {$this->name} (db:{$this->database_name}) was successful.";
+
+        $description .= "\n\nFrequency: {$this->frequency}";
+
+        $url = base_url().'/project/'.data_get($this->database, 'environment.project.uuid').'/environment/'.data_get($this->database, 'environment.uuid').'/database/'.$this->database->uuid;
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::successColor()
+        );
+
+        $message->addButton('View Database', $url);
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $title = 'Database backup successful';
+        $description = "Database backup for {$this->name} (db:{$this->database_name}) was successful.";
+
+        $description .= "\n\nFrequency: {$this->frequency}";
+
+        $url = base_url().'/project/'.data_get($this->database, 'environment.project.uuid').'/environment/'.data_get($this->database, 'environment.uuid').'/database/'.$this->database->uuid;
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::successColor()
+        );
+
+        $message->addButton('View Database', $url);
+
+        return $message;
     }
 
     public function toWebhook(): array

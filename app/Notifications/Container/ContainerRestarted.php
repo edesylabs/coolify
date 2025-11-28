@@ -5,8 +5,10 @@ namespace App\Notifications\Container;
 use App\Models\Server;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
+use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
+use App\Notifications\Dto\TeamsMessage;
 use Illuminate\Notifications\Messages\MailMessage;
 
 class ContainerRestarted extends CustomEmailNotification
@@ -101,6 +103,42 @@ class ContainerRestarted extends CustomEmailNotification
             description: $description,
             color: SlackMessage::warningColor()
         );
+    }
+
+    public function toTeams(): TeamsMessage
+    {
+        $title = 'Resource restarted';
+        $description = "A resource ({$this->name}) has been restarted automatically on {$this->server->name}";
+
+        $message = new TeamsMessage(
+            title: $title,
+            description: $description,
+            color: TeamsMessage::infoColor()
+        );
+
+        if ($this->url) {
+            $message->addButton('View Resource', $this->url);
+        }
+
+        return $message;
+    }
+
+    public function toGoogleChat(): GoogleChatMessage
+    {
+        $title = 'Resource restarted';
+        $description = "A resource ({$this->name}) has been restarted automatically on {$this->server->name}";
+
+        $message = new GoogleChatMessage(
+            title: $title,
+            description: $description,
+            color: GoogleChatMessage::infoColor()
+        );
+
+        if ($this->url) {
+            $message->addButton('View Resource', $this->url);
+        }
+
+        return $message;
     }
 
     public function toWebhook(): array

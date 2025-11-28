@@ -46,6 +46,8 @@ class AuthServiceProvider extends ServiceProvider
         \App\Models\SlackNotificationSettings::class => \App\Policies\NotificationPolicy::class,
         \App\Models\PushoverNotificationSettings::class => \App\Policies\NotificationPolicy::class,
         \App\Models\WebhookNotificationSettings::class => \App\Policies\NotificationPolicy::class,
+        \App\Models\TeamsNotificationSettings::class => \App\Policies\NotificationPolicy::class,
+        \App\Models\GoogleChatNotificationSettings::class => \App\Policies\NotificationPolicy::class,
 
         // API Token policy
         \Laravel\Sanctum\PersonalAccessToken::class => \App\Policies\ApiTokenPolicy::class,

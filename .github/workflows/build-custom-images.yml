@@ -1,9 +1,15 @@
-name: Build Custom Coolify Images
+name: Build Custom Coolify Images (Manual)
+
+# NOTE: This workflow is now a backup. The main release workflow is release.yml
+# which handles version bumping, building, and releasing automatically.
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag for the images (default: latest)'
+        required: false
+        default: 'latest'
 
 permissions:
   contents: read
@@ -37,8 +43,7 @@ jobs:
           file: ./docker/production/Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify:${{ github.event.inputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -65,8 +70,7 @@ jobs:
           file: ./docker/coolify-helper/Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-helper:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-helper:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-helper:${{ github.event.inputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -93,7 +97,6 @@ jobs:
           file: ./docker/coolify-realtime/Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-realtime:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-realtime:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-realtime:${{ github.event.inputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
