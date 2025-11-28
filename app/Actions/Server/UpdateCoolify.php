@@ -53,11 +53,11 @@ class UpdateCoolify
         PullHelperImageJob::dispatch($this->server);
 
         $registry = config('constants.coolify.registry_url');
-        $namespace = env('COOLIFY_IMAGE_NAMESPACE', 'coollabsio');
+        $namespace = env('COOLIFY_IMAGE_NAMESPACE', 'edesylabs');
         $image = "$registry/$namespace/coolify:".$this->latestVersion;
         instant_remote_process(["docker pull -q $image"], $this->server, false);
 
-        $cdn = env('COOLIFY_CDN', 'https://cdn.coollabs.io/coolify');
+        $cdn = env('COOLIFY_CDN', 'https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main');
         remote_process([
             "curl -fsSL $cdn/upgrade.sh -o /data/coolify/source/upgrade.sh",
             "bash /data/coolify/source/upgrade.sh $this->latestVersion $registry $namespace",

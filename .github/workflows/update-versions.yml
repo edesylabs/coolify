@@ -1,14 +1,13 @@
-name: Update versions.json
+name: Update versions.json (Manual)
+
+# NOTE: This workflow is now a backup. The main release workflow is release.yml
+# which handles version bumping and updating versions.json automatically.
 
 on:
-  workflow_run:
-    workflows: ["Build Custom Coolify Images"]
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to set (e.g., 4.0.0-beta.445)'
+        description: 'Version to set (e.g., 4.0.0-beta.445). Leave empty to use version from constants.php'
         required: false
 
 permissions:
@@ -17,7 +16,6 @@ permissions:
 jobs:
   update-versions:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
     
     steps:
       - name: Checkout code
@@ -26,7 +24,11 @@ jobs:
       - name: Get current version
         id: version
         run: |
-          VERSION=$(grep "'version' => '" config/constants.php | sed -E "s/.*'version' => '([^']+)'.*/\1/")
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=$(grep "'version' => '" config/constants.php | sed -E "s/.*'version' => '([^']+)'.*/\1/")
+          fi
           echo "current=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Update versions.json

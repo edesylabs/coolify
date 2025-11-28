@@ -1,0 +1,250 @@
+name: Release
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - "CHANGELOG.md"
+      - "versions.json"
+      - ".github/workflows/coolify-helper.yml"
+      - ".github/workflows/coolify-realtime.yml"
+      - "docker/coolify-helper/Dockerfile"
+      - "docker/coolify-realtime/Dockerfile"
+      - "templates/**"
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: edesylabs
+
+jobs:
+  # Job 1: Bump version and commit
+  bump-version:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+      old_version: ${{ steps.bump.outputs.old_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get current version
+        id: current
+        run: |
+          VERSION=$(grep "'version' => '" config/constants.php | sed -E "s/.*'version' => '([^']+)'.*/\1/")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Determine version bump type
+        id: bump_type
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "type=${{ github.event.inputs.version_bump }}" >> $GITHUB_OUTPUT
+          else
+            # Check commit messages for conventional commits
+            COMMIT_MSG=$(git log -1 --pretty=%B)
+            if echo "$COMMIT_MSG" | grep -qiE "^(feat|feature)(\(.+\))?!:|BREAKING CHANGE"; then
+              echo "type=major" >> $GITHUB_OUTPUT
+            elif echo "$COMMIT_MSG" | grep -qiE "^(feat|feature)(\(.+\))?:"; then
+              echo "type=minor" >> $GITHUB_OUTPUT
+            else
+              echo "type=patch" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Bump version
+        id: bump
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          BUMP_TYPE="${{ steps.bump_type.outputs.type }}"
+
+          echo "Current version: $CURRENT"
+          echo "Bump type: $BUMP_TYPE"
+
+          # Parse version (handles formats like 4.0.0-beta.444)
+          if [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-beta\.([0-9]+)$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
+            BETA="${BASH_REMATCH[4]}"
+
+            case "$BUMP_TYPE" in
+              major)
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                BETA=1
+                ;;
+              minor)
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                BETA=1
+                ;;
+              patch)
+                BETA=$((BETA + 1))
+                ;;
+            esac
+
+            NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}-beta.${BETA}"
+          elif [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            # Standard semver without beta
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
+
+            case "$BUMP_TYPE" in
+              major)
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                ;;
+              minor)
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                ;;
+              patch)
+                PATCH=$((PATCH + 1))
+                ;;
+            esac
+
+            NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          else
+            echo "Unable to parse version: $CURRENT"
+            exit 1
+          fi
+
+          echo "New version: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "old_version=$CURRENT" >> $GITHUB_OUTPUT
+
+      - name: Update config/constants.php
+        run: |
+          sed -i "s/'version' => '.*'/'version' => '${{ steps.bump.outputs.new_version }}'/" config/constants.php
+
+      - name: Update versions.json
+        run: |
+          jq --arg ver "${{ steps.bump.outputs.new_version }}" \
+            '.coolify.v4.version = $ver' versions.json > versions.tmp
+          mv versions.tmp versions.json
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add config/constants.php versions.json
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
+          git push
+
+  # Job 2: Build and push Docker images
+  build-images:
+    needs: bump-version
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: coolify
+            dockerfile: ./docker/production/Dockerfile
+          - image: coolify-helper
+            dockerfile: ./docker/coolify-helper/Dockerfile
+          - image: coolify-realtime
+            dockerfile: ./docker/coolify-realtime/Dockerfile
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main  # Get the latest with version bump
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:${{ needs.bump-version.outputs.new_version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # Job 3: Create GitHub Release
+  create-release:
+    needs: [bump-version, build-images]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Generate changelog for release
+        id: changelog
+        run: |
+          # Get commits since last tag or last 20 commits
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -n "$LAST_TAG" ]; then
+            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges | head -50)
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -20)
+          fi
+
+          # Create release notes
+          cat << EOF > release_notes.md
+          ## What's Changed
+
+          $COMMITS
+
+          ## Docker Images
+
+          \`\`\`bash
+          # Pull the new version
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify:${{ needs.bump-version.outputs.new_version }}
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-helper:${{ needs.bump-version.outputs.new_version }}
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-realtime:${{ needs.bump-version.outputs.new_version }}
+          \`\`\`
+
+          ## Upgrade
+
+          Users can upgrade directly from the Coolify dashboard or wait for automatic updates.
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/v${{ needs.bump-version.outputs.old_version }}...v${{ needs.bump-version.outputs.new_version }}
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.bump-version.outputs.new_version }}
+          name: v${{ needs.bump-version.outputs.new_version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(needs.bump-version.outputs.new_version, 'beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
