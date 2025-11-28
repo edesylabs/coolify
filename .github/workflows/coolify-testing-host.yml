@@ -1,6 +1,15 @@
-name: Coolify Testing Host
+name: Coolify Testing Host [DISABLED]
+
+# DISABLED: This workflow is for the original Coolify repository testing.
 
 on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'This workflow is disabled.'
+        required: false
+
+_disabled_on:
   push:
     branches: [ "next" ]
     paths:

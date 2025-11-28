@@ -1,5 +1,16 @@
-name: Add comment based on label
+name: Add comment based on label [DISABLED]
+
+# DISABLED: This workflow references coollabsio documentation.
+# Update the URLs if you have your own documentation repository.
+
 on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'This workflow is disabled.'
+        required: false
+
+_disabled_on:
   pull_request_target:
     types:
       - labeled

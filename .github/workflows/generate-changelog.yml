@@ -1,9 +1,18 @@
-name: Generate Changelog
+name: Generate Changelog [DISABLED]
+
+# DISABLED: This workflow is for v4.x branch.
+# The release.yml workflow generates release notes automatically.
 
 on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'Manual changelog generation'
+        required: false
+
+_disabled_on:
   push:
     branches: [ v4.x ]
-  workflow_dispatch:
 
 permissions:
   contents: write
