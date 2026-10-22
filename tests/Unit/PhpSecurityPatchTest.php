@@ -30,6 +30,17 @@ it('pulls the MinIO client from quay.io instead of the removed Docker Hub image'
     'helper' => 'docker/coolify-helper/Dockerfile',
 ]);
 
+it('installs a postgres client that exists on the Alpine 3.24 base image', function (string $dockerfile) {
+    $contents = file_get_contents(__DIR__.'/../../'.$dockerfile);
+
+    expect($contents)
+        ->toContain('ARG POSTGRES_VERSION=18')
+        ->not->toContain('ARG POSTGRES_VERSION=15');
+})->with([
+    'production' => 'docker/production/Dockerfile',
+    'development' => 'docker/development/Dockerfile',
+]);
+
 it('refreshes the base image when building in CI', function (string $workflow) {
     expect(file_get_contents(__DIR__.'/../../.github/workflows/'.$workflow))->toContain('pull: true');
 })->with([

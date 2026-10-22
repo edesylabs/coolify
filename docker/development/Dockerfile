@@ -7,7 +7,8 @@ ARG MINIO_VERSION=RELEASE.2026-09-06T02-44-40Z
 # https://github.com/cloudflare/cloudflared/releases
 ARG CLOUDFLARED_VERSION=2025.7.0
 # https://www.postgresql.org/support/versioning/
-ARG POSTGRES_VERSION=15
+# Client 18 is used against the Postgres 15 server: postgresql15-client was removed in Alpine 3.23+ (pg_dump/psql support older servers)
+ARG POSTGRES_VERSION=18
 
 # =================================================================
 # Get MinIO client
