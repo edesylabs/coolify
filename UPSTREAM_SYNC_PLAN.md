@@ -1,6 +1,39 @@
 # Upstream Sync Plan — merge coollabsio/coolify `v4.4.7` into the edesylabs fork
 
-**Status:** Planned · **Created:** 2026-10-22 · **Target:** upstream stable tag **`v4.4.7`** (2026-10-21)
+**Status:** Implemented on branch `sync/upstream-v4.4.7` (not merged to `main`) · **Created:** 2026-10-22 · **Target:** upstream stable tag **`v4.4.7`** (2026-10-21)
+
+## 0. Implementation log (what was actually done)
+
+Commits on `sync/upstream-v4.4.7`: merge `427b09ba7`, fork integration `e38a1a482`, fork fixes `97b9254f7`, workflow cleanup `2d339ac14`.
+
+**Deviations from the plan below (verified during implementation):**
+
+| Plan said | Reality | Why |
+|---|---|---|
+| D2: version `4.4.7-edesy.N` | **`4.4.7.N`** (code at `4.4.7.0`; first release `4.4.7.1`) | `version_compare('4.4.7','4.4.7-edesy.1')` = 1, so the suffix scheme sorts *below* upstream. Four-part sorts above 4.4.7 and below 4.4.8 |
+| §5.2: Dockerfiles use serversideup v5.0.2 | Production uses upstream's `ghcr.io/coollabsio/serversideup-php:8.4-fpm-nginx-alpine-v4.5.1-hotfix` (verified `PHP_VERSION=8.4.27`); development pinned to **v4.5.3** (upstream had unpatched v4.5.1) | Upstream: serversideup v5 breaks Coolify startup (#12141) |
+| D5: rename fork `domain-input` → `fqdn-input` | Fork component **removed** | Upstream moved all domain fields to its Domains page; nothing used the fork component |
+| §5.3: re-apply Orchestrator calls in `ApplicationDeploymentJob` | Kept **upstream Swarm logic**; only Kubernetes deploy path, K8s "no additional destinations" and dynamic-domain labels re-applied | Fork's Orchestrator calls were a refactor of the old inline Swarm code; reusing them would revert upstream Swarm fixes. Upstream now always fails on registry push errors, so `requiresRegistry()` is redundant |
+| §6.2: helper version passed as arg | `upgrade.sh` reads it from `versions.json` (`coolify.helper.version`) | Keeps the fork contract `upgrade.sh <version> <registry> <namespace>` for 4.1.0-beta.x callers |
+| — | **New migration** `2026_10_22_000000_use_ghcr_registry_for_edesylabs_fork` | Upstream adds `instance_settings.docker_registry_url` defaulting to `docker.io`; the in-app upgrade would then pull `docker.io/edesylabs/coolify` (does not exist) |
+| — | **9 upstream workflows deleted** (`coolify-main-build`, `claude`, `pr-quality`, `sync-main-to-release`, …) | They trigger on push to `main` / PRs before they could be disabled |
+
+**Pre-existing fork bugs found by upstream's test suite and fixed:**
+- `2025_11_24_131636` re-added `dns_provider` columns → failed on every fresh DB and blocked all later migrations (now idempotent).
+- `DomainProvisioning*` events used `$application->team->id` (throws) → `team()`.
+- `Server/Orchestrator` Livewire had **no authorization** (kubeconfig/settings editable, `kubectl` run by any team member).
+- Teams/Google Chat/Kubernetes/Orchestrator `syncData()` public → private with authorization at call sites.
+- Orchestrator/Wildcard SSL/Kubernetes views used `<x-forms.select>` (removed upstream) → pages would 500.
+- `ServerSetting`/`Application`/`ApplicationSetting` now have upstream `$fillable` whitelists → fork columns added (otherwise silently dropped); `dns_provider_credentials`, `webhook_secret`, `kubernetes_config` added to `$hidden`.
+- Upstream's new Domains page didn't regenerate the fork's Traefik dynamic config → hook added in `Domains::saveDomainList()`.
+
+**Verification (local, OrbStack, PHP 8.4):** PHP lint of all 2,617 changed files; all migrations from a fresh DB; all Blade templates compile; all 595 routes resolve. Unit suite: 4,116 passed, 6 failed, identical to pristine upstream `v4.4.7` in the same environment (they need Docker processes, network or doc files). Feature suite: 8,776 passed; the remaining failures also fail on upstream (no `git` binary in the test image).
+
+**Production image:** `docker build -f docker/production/Dockerfile` succeeds; the image reports PHP 8.4.27, version 4.4.7.0, pg_dump 18.6, mc RELEASE.2026-09-06.
+
+**Remaining before merging to `main`:** staging test with a production DB copy (§8.3), including the in-app Upgrade from `4.1.0-beta.5`.
+
+---
 **Related:** [PHP_SECURITY_PATCH_PLAN.md](PHP_SECURITY_PATCH_PLAN.md) · [UPGRADE_UI_AND_RELEASE_PLAN.md](UPGRADE_UI_AND_RELEASE_PLAN.md)
 
 > All numbers below come from a dry-run merge (`git merge-tree --write-tree HEAD v4.4.7`) against fork `main` at `9a4276f66` (`4.1.0-beta.5`). Nothing has been merged yet. The `upstream` remote was added locally: `git remote add upstream https://github.com/coollabsio/coolify.git`.
