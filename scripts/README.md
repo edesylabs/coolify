@@ -2,7 +2,25 @@
 
 This directory contains scripts for deploying and managing your custom Coolify fork.
 
-## 🎯 Main Script (Use This!)
+## 🚀 One Command: Install or Update (`deploy.sh`)
+
+Run as root on any server. It detects whether Coolify is installed and does the right thing, with no prompts:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/deploy.sh | bash
+```
+
+- **Not installed** → runs `install.sh`
+- **Installed** → backs up the Coolify database to `/data/coolify/backups/deploy/`, points `.env` at the edesylabs images, then runs `upgrade.sh`
+- **Always** → waits for `coolify` to be healthy and checks it runs the expected image with PHP ≥ 8.4.27
+
+| Option | Example |
+|---|---|
+| Specific version | `curl -fsSL …/scripts/deploy.sh \| bash -s -- 4.1.0-beta.4` |
+| Preview only | `curl -fsSL …/scripts/deploy.sh \| DRY_RUN=true bash` |
+| Skip DB backup | `curl -fsSL …/scripts/deploy.sh \| SKIP_BACKUP=true bash` |
+
+## 🎯 Interactive Manager (Migration / Rollback)
 
 ### **`coolify-custom.sh`** - All-in-One Deployment Manager
 
