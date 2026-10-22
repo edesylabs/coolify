@@ -91,3 +91,14 @@ it('runs upgrade.sh with version, registry and namespace and checks the PHP vers
         ->toContain('bash "$SOURCE_DIR/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE"')
         ->toContain('MIN_PHP_VERSION="${MIN_PHP_VERSION:-8.4.27}"');
 });
+
+it('waits for the background container restart of upgrade.sh before verifying or rolling back', function () {
+    $script = file_get_contents(__DIR__.'/../../scripts/deploy.sh');
+
+    expect($script)
+        ->toContain("grep -q 'Container restart sequence started in background' \"\$UPGRADE_LOG\"")
+        ->toContain("! grep -q 'Step 6/6: Upgrade complete' \"\$UPGRADE_LOG\"")
+        ->toContain('Not rolling back while it runs')
+        ->and(strpos($script, 'wait_for_restart || fail'))->toBeGreaterThan(strpos($script, 'bash "$SOURCE_DIR/upgrade.sh"'))
+        ->and(strpos($script, 'if restart_in_progress; then'))->toBeLessThan(strpos($script, 'if wait_for_database && restore_database; then'));
+});

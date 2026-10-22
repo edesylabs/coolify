@@ -46,6 +46,7 @@ HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
 # Set once the snapshot exists; failures after that point trigger a rollback.
 SNAPSHOT_DIR=""
 PREVIOUS_IMAGE=""
+UPGRADE_LOG=""
 ROLLBACK_ARMED=false
 ROLLING_BACK=false
 
@@ -184,11 +185,40 @@ wait_for_healthy() {
     return 1
 }
 
+# upgrade.sh stops and recreates the containers in a detached background job and returns
+# before that job is done. Until its log says step 6/6, the old containers may still be up
+# and anything we do to them (verify, rollback) races the restart.
+restart_in_progress() {
+    [ -n "$UPGRADE_LOG" ] &&
+        grep -q 'Container restart sequence started in background' "$UPGRADE_LOG" &&
+        ! grep -q 'Step 6/6: Upgrade complete' "$UPGRADE_LOG"
+}
+
+wait_for_restart() {
+    local waited=0
+    while restart_in_progress; do
+        [ "$waited" -ge "$HEALTH_TIMEOUT" ] && return 1
+        sleep 5
+        waited=$((waited + 5))
+    done
+}
+
+wait_for_database() {
+    local waited=0
+    until docker exec coolify-db pg_isready -U "$(db_user)" -q >/dev/null 2>&1; do
+        [ "$waited" -ge 60 ] && return 1
+        sleep 2
+        waited=$((waited + 2))
+    done
+}
+
+# compose_up <image tag> [service...]
 compose_up() {
     local image_tag="$1"
+    shift
     local files="-f $SOURCE_DIR/docker-compose.yml -f $SOURCE_DIR/docker-compose.prod.yml"
     [ -f "$SOURCE_DIR/docker-compose.custom.yml" ] && files="$files -f $SOURCE_DIR/docker-compose.custom.yml"
-    local args="--project-directory $SOURCE_DIR --env-file $ENV_FILE $files up -d --remove-orphans --force-recreate"
+    local args="--project-directory $SOURCE_DIR --env-file $ENV_FILE $files up -d --remove-orphans --force-recreate $*"
     if docker compose version >/dev/null 2>&1; then
         # shellcheck disable=SC2086
         LATEST_IMAGE="$image_tag" docker compose $args
@@ -217,6 +247,15 @@ rollback() {
     echo ""
     warn "Update failed — rolling back to $PREVIOUS_IMAGE"
 
+    if restart_in_progress; then
+        info "upgrade.sh is still restarting the containers; waiting for it to finish first"
+        if ! wait_for_restart; then
+            echo -e "${RED}✗${NC} upgrade.sh is still running after ${HEALTH_TIMEOUT}s (log: $UPGRADE_LOG)." >&2
+            echo -e "${RED}✗${NC} Not rolling back while it runs. Snapshot kept at $SNAPSHOT_DIR" >&2
+            return
+        fi
+    fi
+
     local failed=false
     for file in .env docker-compose.yml docker-compose.prod.yml docker-compose.custom.yml; do
         [ -f "$SNAPSHOT_DIR/$file" ] && cp -p "$SNAPSHOT_DIR/$file" "$SOURCE_DIR/$file"
@@ -226,7 +265,11 @@ rollback() {
     docker stop coolify >/dev/null 2>&1 || true
 
     if [ -f "$SNAPSHOT_DIR/coolify-db.sql.gz" ]; then
-        if restore_database; then
+        # The upgrade removes and recreates coolify-db; make sure it is up before restoring into it
+        if [ "$(docker inspect coolify-db --format '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
+            compose_up "${PREVIOUS_IMAGE##*:}" postgres redis >/dev/null 2>&1 || true
+        fi
+        if wait_for_database && restore_database; then
             ok "Database restored"
         else
             failed=true
@@ -270,12 +313,19 @@ run_update() {
     info "Updating to $VERSION ($REGISTRY_URL/$IMAGE_NAMESPACE)"
     curl -fsSL "$CDN/scripts/upgrade.sh" -o "$SOURCE_DIR/upgrade.sh" || fail "Could not download upgrade.sh from $CDN"
     # upgrade.sh also points .env at the registry/namespace/CDN given here
-    if ! COOLIFY_CDN="$CDN" bash "$SOURCE_DIR/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE"; then
-        local log
-        log=$(ls -t "$SOURCE_DIR"/upgrade-*.log 2>/dev/null | head -1 || true)
+    local upgrade_ok=true
+    COOLIFY_CDN="$CDN" bash "$SOURCE_DIR/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE" || upgrade_ok=false
+    # This run's log is the one created after the snapshot
+    UPGRADE_LOG=$(find "$SOURCE_DIR" -maxdepth 1 -name 'upgrade-*.log' -newer "$SNAPSHOT_DIR/previous-image" 2>/dev/null | sort | tail -1)
+    if [ "$upgrade_ok" = "false" ]; then
+        local log="$UPGRADE_LOG"
         [ -n "$log" ] && tail -n 30 "$log" >&2
         fail "upgrade.sh failed. Full log: ${log:-$SOURCE_DIR/upgrade-*.log}"
     fi
+
+    info "Waiting for upgrade.sh to restart the containers (up to ${HEALTH_TIMEOUT}s)"
+    wait_for_restart || fail "upgrade.sh did not finish restarting the containers within ${HEALTH_TIMEOUT}s. Log: $UPGRADE_LOG"
+    ok "Containers restarted"
 }
 
 verify_deployment() {
