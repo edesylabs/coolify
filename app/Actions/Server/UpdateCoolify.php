@@ -59,7 +59,7 @@ class UpdateCoolify
 
         $cdn = env('COOLIFY_CDN', 'https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main');
         remote_process([
-            "curl -fsSL $cdn/upgrade.sh -o /data/coolify/source/upgrade.sh",
+            "curl -fsSL $cdn/scripts/upgrade.sh -o /data/coolify/source/upgrade.sh",
             "bash /data/coolify/source/upgrade.sh $this->latestVersion $registry $namespace",
         ], $this->server);
     }

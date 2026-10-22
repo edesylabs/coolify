@@ -1,6 +1,7 @@
 # Versions
 # https://hub.docker.com/r/serversideup/php/tags?name=8.4-fpm-nginx-alpine
-ARG SERVERSIDEUP_PHP_VERSION=8.4-fpm-nginx-alpine
+# Pinned: v4.5.3 ships PHP 8.4.27 (fixes CVE-2026-109618 / CVE-2026-109619)
+ARG SERVERSIDEUP_PHP_VERSION=8.4-fpm-nginx-alpine-v4.5.3
 # https://github.com/minio/mc/releases
 ARG MINIO_VERSION=RELEASE.2025-05-21T01-59-54Z
 # https://github.com/cloudflare/cloudflared/releases

@@ -708,7 +708,7 @@ echo -e "5. Download required files from CDN. "
 curl -fsSL $CDN/docker-compose.yml -o /data/coolify/source/docker-compose.yml
 curl -fsSL $CDN/docker-compose.prod.yml -o /data/coolify/source/docker-compose.prod.yml
 curl -fsSL $CDN/.env.production -o /data/coolify/source/.env.production
-curl -fsSL $CDN/upgrade.sh -o /data/coolify/source/upgrade.sh
+curl -fsSL $CDN/scripts/upgrade.sh -o /data/coolify/source/upgrade.sh
 
 echo -e "6. Setting up environment variable file"
 
@@ -819,9 +819,9 @@ echo -e " - Please wait."
 getAJoke
 
 if [[ $- == *x* ]]; then
-    bash -x /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${LATEST_HELPER_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "true"
+    bash -x /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "${COOLIFY_IMAGE_NAMESPACE:-edesylabs}" "true"
 else
-    bash /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${LATEST_HELPER_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "true"
+    bash /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "${COOLIFY_IMAGE_NAMESPACE:-edesylabs}" "true"
 fi
 echo " - Coolify installed successfully."
 
