@@ -51,11 +51,43 @@ it('normalises an explicitly requested version', function () {
         ->toContain('Target version : 4.1.0-beta.2');
 });
 
-it('backs up the database and verifies the PHP version on update', function () {
+it('snapshots the database and configuration before updating', function () {
+    expect(file_get_contents(__DIR__.'/../../scripts/deploy.sh'))
+        ->toContain('docker exec coolify-db pg_dump -U "$(db_user)" "$(db_name)" | gzip >"$SNAPSHOT_DIR/coolify-db.sql.gz"')
+        ->toContain('gzip -t "$SNAPSHOT_DIR/coolify-db.sql.gz"')
+        ->toContain('for file in .env docker-compose.yml docker-compose.prod.yml docker-compose.custom.yml; do');
+});
+
+it('refuses to update while deployments are queued or running', function () {
+    expect(file_get_contents(__DIR__.'/../../scripts/deploy.sh'))
+        ->toContain("SELECT count(*) FROM application_deployment_queues WHERE status IN ('queued', 'in_progress');")
+        ->toContain('re-run with FORCE=true');
+});
+
+it('pulls the target image before changing anything', function () {
     $script = file_get_contents(__DIR__.'/../../scripts/deploy.sh');
 
-    expect($script)
-        ->toContain('docker exec coolify-db pg_dump -U coolify coolify')
-        ->toContain('MIN_PHP_VERSION="${MIN_PHP_VERSION:-8.4.27}"')
-        ->toContain('bash "$DATA_DIR/source/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE"');
+    expect(strpos($script, 'docker pull -q "$target"'))->toBeLessThan(strpos($script, "\nsnapshot() {"))
+        ->and($script)->toContain("run_update() {\n    preflight_update\n    snapshot\n");
+});
+
+it('verifies migrations explicitly because the startup migration always exits 0', function () {
+    expect(file_get_contents(__DIR__.'/../../scripts/deploy.sh'))
+        ->toContain('docker exec coolify php artisan migrate --force --isolated --no-interaction')
+        ->toContain('docker exec coolify php artisan migrate:status --pending=1 --no-interaction')
+        ->toContain("verify_deployment\nverify_migrations\n");
+});
+
+it('rolls back configuration, database and image when an update fails', function () {
+    expect(file_get_contents(__DIR__.'/../../scripts/deploy.sh'))
+        ->toContain('if [ "$ROLLBACK_ARMED" = "true" ] && [ "$ROLLING_BACK" = "false" ]; then')
+        ->toContain('DROP DATABASE IF EXISTS \\"$database\\" WITH (FORCE);')
+        ->toContain('gunzip -c "$dump" | docker exec -i coolify-db psql -U "$user" -d "$database" -v ON_ERROR_STOP=1 -q')
+        ->toContain('compose_up "${PREVIOUS_IMAGE##*:}"');
+});
+
+it('runs upgrade.sh with version, registry and namespace and checks the PHP version', function () {
+    expect(file_get_contents(__DIR__.'/../../scripts/deploy.sh'))
+        ->toContain('bash "$SOURCE_DIR/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE"')
+        ->toContain('MIN_PHP_VERSION="${MIN_PHP_VERSION:-8.4.27}"');
 });

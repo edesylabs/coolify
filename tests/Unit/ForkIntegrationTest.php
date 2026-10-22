@@ -29,7 +29,7 @@ it('calls upgrade.sh with version, registry and namespace', function (string $fi
 })->with([
     'install.sh' => ['scripts/install.sh', 'upgrade.sh "${LATEST_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "${IMAGE_NAMESPACE}" "true"'],
     'UpdateCoolify' => ['app/Actions/Server/UpdateCoolify.php', "escapeshellarg(config('constants.coolify.image_namespace'))"],
-    'deploy.sh' => ['scripts/deploy.sh', 'bash "$DATA_DIR/source/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE"'],
+    'deploy.sh' => ['scripts/deploy.sh', 'bash "$SOURCE_DIR/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE"'],
 ]);
 
 it('points upgraded servers at the fork and the upstream helper image', function () {
