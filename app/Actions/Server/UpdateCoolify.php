@@ -2,8 +2,10 @@
 
 namespace App\Actions\Server;
 
-use App\Jobs\PullHelperImageJob;
 use App\Models\Server;
+use App\Services\CoolifyUpgradeStatus;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
 use Lorisleiva\Actions\Concerns\AsAction;
 
@@ -29,8 +31,59 @@ class UpdateCoolify
         if (! $this->server) {
             return;
         }
-        CleanupDocker::dispatch($this->server, false, false);
-        $this->latestVersion = get_latest_version_of_coolify();
+
+        // Fetch fresh version from CDN instead of using cache
+        try {
+            $response = Http::retry(3, 1000)->timeout(10)
+                ->get(config('constants.coolify.versions_url'));
+
+            if ($response->successful()) {
+                $versions = $response->json();
+                $this->latestVersion = data_get($versions, 'coolify.v4.version');
+            } else {
+                // Fallback to cache if CDN unavailable
+                $cacheVersion = get_latest_version_of_coolify();
+
+                // Validate cache version against current running version
+                if ($cacheVersion && version_compare($cacheVersion, config('constants.coolify.version'), '<')) {
+                    Log::error('Failed to fetch fresh version from CDN and cache is corrupted/outdated', [
+                        'cached_version' => $cacheVersion,
+                        'current_version' => config('constants.coolify.version'),
+                    ]);
+                    throw new \Exception(
+                        'Cannot determine latest version: CDN unavailable and cache version '.
+                        "({$cacheVersion}) is older than running version (".config('constants.coolify.version').')'
+                    );
+                }
+
+                $this->latestVersion = $cacheVersion;
+                Log::warning('Failed to fetch fresh version from CDN (unsuccessful response), using validated cache', [
+                    'version' => $cacheVersion,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $cacheVersion = get_latest_version_of_coolify();
+
+            // Validate cache version against current running version
+            if ($cacheVersion && version_compare($cacheVersion, config('constants.coolify.version'), '<')) {
+                Log::error('Failed to fetch fresh version from CDN and cache is corrupted/outdated', [
+                    'error' => $e->getMessage(),
+                    'cached_version' => $cacheVersion,
+                    'current_version' => config('constants.coolify.version'),
+                ]);
+                throw new \Exception(
+                    'Cannot determine latest version: CDN unavailable and cache version '.
+                    "({$cacheVersion}) is older than running version (".config('constants.coolify.version').')'
+                );
+            }
+
+            $this->latestVersion = $cacheVersion;
+            Log::warning('Failed to fetch fresh version from CDN, using validated cache', [
+                'error' => $e->getMessage(),
+                'version' => $cacheVersion,
+            ]);
+        }
+
         $this->currentVersion = config('constants.coolify.version');
         if (! $manual_update) {
             if (! $settings->is_auto_update_enabled) {
@@ -43,6 +96,20 @@ class UpdateCoolify
                 return;
             }
         }
+
+        // ALWAYS check for downgrades (even for manual updates)
+        if (version_compare($this->latestVersion, $this->currentVersion, '<')) {
+            Log::error('Downgrade prevented', [
+                'target_version' => $this->latestVersion,
+                'current_version' => $this->currentVersion,
+                'manual_update' => $manual_update,
+            ]);
+            throw new \Exception(
+                "Cannot downgrade from {$this->currentVersion} to {$this->latestVersion}. ".
+                'If you need to downgrade, please do so manually via Docker commands.'
+            );
+        }
+
         $this->update();
         $settings->new_version_available = false;
         $settings->save();
@@ -50,17 +117,43 @@ class UpdateCoolify
 
     private function update()
     {
-        PullHelperImageJob::dispatch($this->server);
+        $this->ensureNoUpgradeIsRunning();
 
-        $registry = config('constants.coolify.registry_url');
-        $namespace = env('COOLIFY_IMAGE_NAMESPACE', 'edesylabs');
-        $image = "$registry/$namespace/coolify:".$this->latestVersion;
-        instant_remote_process(["docker pull -q $image"], $this->server, false);
+        $latestHelperImageVersion = getHelperVersion();
+        $upgradeScriptUrl = config('constants.coolify.upgrade_script_url');
+        $registryUrl = coolifyRegistryUrl();
 
-        $cdn = env('COOLIFY_CDN', 'https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main');
         remote_process([
-            "curl -fsSL $cdn/scripts/upgrade.sh -o /data/coolify/source/upgrade.sh",
-            "bash /data/coolify/source/upgrade.sh $this->latestVersion $registry $namespace",
+            "curl -fsSL {$upgradeScriptUrl} -o /data/coolify/source/upgrade.sh",
+            'bash /data/coolify/source/upgrade.sh '.
+                escapeshellarg($this->latestVersion).' '.
+                escapeshellarg($latestHelperImageVersion).' '.
+                escapeshellarg($registryUrl),
         ], $this->server);
+    }
+
+    private function ensureNoUpgradeIsRunning(): void
+    {
+        $status = $this->readUpgradeStatus();
+
+        if (CoolifyUpgradeStatus::isRunning((string) $status)) {
+            Log::warning('Upgrade skipped because another upgrade is running', [
+                'target_version' => $this->latestVersion,
+                'status' => $status,
+            ]);
+            throw new \Exception(
+                'Another Coolify upgrade is already running. Wait for it to finish. '.
+                'If it has stopped, you can upgrade again '.CoolifyUpgradeStatus::RUNNING_LOCK_EXPIRES_AFTER_MINUTES.' minutes after its last status update.'
+            );
+        }
+    }
+
+    protected function readUpgradeStatus(): ?string
+    {
+        return instant_remote_process(
+            ['cat '.CoolifyUpgradeStatus::FILE.' 2>/dev/null || true'],
+            $this->server,
+            false
+        );
     }
 }

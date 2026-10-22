@@ -2,55 +2,46 @@
 
 namespace App\Http\Controllers\Webhook;
 
-use App\Enums\ProcessStatus;
+use App\Enums\GithubRunnerStatus;
+use App\Exceptions\InvalidWebhookPayloadException;
 use App\Http\Controllers\Controller;
-use App\Jobs\ApplicationPullRequestUpdateJob;
-use App\Jobs\DeleteResourceJob;
+use App\Http\Controllers\Webhook\Concerns\DetectsSkipDeployCommits;
+use App\Http\Controllers\Webhook\Concerns\MatchesManualWebhookApplications;
+use App\Http\Controllers\Webhook\Concerns\ReadsWebhookPushPayload;
+use App\Jobs\CleanupGithubRunnerJob;
 use App\Jobs\GithubAppPermissionJob;
+use App\Jobs\ProcessGithubPullRequestWebhook;
+use App\Jobs\ProvisionGithubRunnerJob;
 use App\Models\Application;
-use App\Models\ApplicationPreview;
 use App\Models\GithubApp;
+use App\Models\GithubRunnerConfig;
+use App\Models\GithubRunnerExecution;
 use App\Models\PrivateKey;
+use App\Services\GithubRunner\GithubRunnerApi;
+use App\Services\GithubRunner\GithubRunnerContainer;
 use Exception;
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Visus\Cuid2\Cuid2;
 
 class Github extends Controller
 {
+    use DetectsSkipDeployCommits;
+    use MatchesManualWebhookApplications;
+    use ReadsWebhookPushPayload;
+
     public function manual(Request $request)
     {
         try {
             $return_payloads = collect([]);
             $x_github_delivery = request()->header('X-GitHub-Delivery');
-            if (app()->isDownForMaintenance()) {
-                $epoch = now()->valueOf();
-                $files = Storage::disk('webhooks-during-maintenance')->files();
-                $github_delivery_found = collect($files)->filter(function ($file) use ($x_github_delivery) {
-                    return Str::contains($file, $x_github_delivery);
-                })->first();
-                if ($github_delivery_found) {
-                    return;
-                }
-                $data = [
-                    'attributes' => $request->attributes->all(),
-                    'request' => $request->request->all(),
-                    'query' => $request->query->all(),
-                    'server' => $request->server->all(),
-                    'files' => $request->files->all(),
-                    'cookies' => $request->cookies->all(),
-                    'headers' => $request->headers->all(),
-                    'content' => $request->getContent(),
-                ];
-                $json = json_encode($data);
-                Storage::disk('webhooks-during-maintenance')->put("{$epoch}_Github::manual_{$x_github_delivery}", $json);
-
-                return;
-            }
-            $x_github_event = Str::lower($request->header('X-GitHub-Event'));
-            $x_hub_signature_256 = Str::after($request->header('X-Hub-Signature-256'), 'sha256=');
+            $x_github_event = Str::lower((string) $request->header('X-GitHub-Event'));
+            $x_hub_signature_256 = Str::after((string) $request->header('X-Hub-Signature-256'), 'sha256=');
             $content_type = $request->header('Content-Type');
             $payload = $request->collect();
             if ($x_github_event === 'ping') {
@@ -59,43 +50,61 @@ class Github extends Controller
             }
 
             if ($content_type !== 'application/json') {
-                $payload = json_decode(data_get($payload, 'payload'), true);
+                $form_payload = data_get($payload, 'payload');
+                $payload = is_string($form_payload) ? json_decode($form_payload, true) : null;
             }
             if ($x_github_event === 'push') {
-                $branch = data_get($payload, 'ref');
+                $branch = $this->webhookPushBranch(data_get($payload, 'ref'));
                 $full_name = data_get($payload, 'repository.full_name');
-                if (Str::isMatch('/refs\/heads\/*/', $branch)) {
-                    $branch = Str::after($branch, 'refs/heads/');
-                }
-                $added_files = data_get($payload, 'commits.*.added');
-                $removed_files = data_get($payload, 'commits.*.removed');
-                $modified_files = data_get($payload, 'commits.*.modified');
-                $changed_files = collect($added_files)->concat($removed_files)->concat($modified_files)->unique()->flatten();
+                $commit = $this->webhookCommitSha($payload, 'after');
+                $changed_files = $this->webhookPushChangedFiles($payload);
+                $skip_deploy_commits = self::shouldSkipDeploy($this->webhookPushCommitMessages($payload));
             }
             if ($x_github_event === 'pull_request') {
-                $action = data_get($payload, 'action');
+                [
+                    'action' => $action,
+                    'pull_request_id' => $pull_request_id,
+                    'pull_request_html_url' => $pull_request_html_url,
+                    'pull_request_title' => $pull_request_title,
+                    'branch' => $branch,
+                    'base_branch' => $base_branch,
+                    'before_sha' => $before_sha,
+                    'after_sha' => $after_sha,
+                    'commit_sha' => $commit_sha,
+                    'author_association' => $author_association,
+                    'is_fork_pull_request' => $is_fork_pull_request,
+                ] = $this->readPullRequestPayload($payload);
                 $full_name = data_get($payload, 'repository.full_name');
-                $pull_request_id = data_get($payload, 'number');
-                $pull_request_html_url = data_get($payload, 'pull_request.html_url');
-                $branch = data_get($payload, 'pull_request.head.ref');
-                $base_branch = data_get($payload, 'pull_request.base.ref');
-                $author_association = data_get($payload, 'pull_request.author_association');
             }
-            if (! $branch) {
+            if (! in_array($x_github_event, ['push', 'pull_request'])) {
+                return response("Nothing to do. Event '$x_github_event' is not supported.");
+            }
+            if (! $branch || ($x_github_event === 'pull_request' && $action !== 'closed' && ! $base_branch)) {
                 return response('Nothing to do. No branch found in the request.');
             }
-            $applications = Application::where('git_repository', 'like', "%$full_name%");
-            if ($x_github_event === 'push') {
-                $applications = $applications->where('git_branch', $branch)->get();
-                if ($applications->isEmpty()) {
-                    return response("Nothing to do. No applications found with deploy key set, branch is '$branch' and Git Repository name has $full_name.");
-                }
+            // A deleted branch has no commit to deploy. No secret is checked here.
+            if ($x_github_event === 'push' && $this->isWebhookBranchDeletionPush($payload)) {
+                return response('Nothing to do. Branch deleted.');
             }
-            if ($x_github_event === 'pull_request') {
-                $applications = $applications->where('git_branch', $base_branch)->get();
-                if ($applications->isEmpty()) {
-                    return response("Nothing to do. No applications found with branch '$base_branch'.");
-                }
+            $full_name = $this->manualWebhookRepositoryFullName($full_name);
+            if ($full_name === null) {
+                return response('Nothing to do. Invalid repository.');
+            }
+            $matched_branch = match (true) {
+                $x_github_event === 'push' => $branch,
+                $action === 'closed' => null,
+                default => $base_branch,
+            };
+            $failure_key = $this->manualWebhookFailureRateLimitKey($request, 'github', $full_name, $matched_branch);
+            // A redelivery of the same signed payload is one guess.
+            $failure_attempt = $this->manualWebhookSignedPayloadAttempt($request, $x_hub_signature_256);
+            $applications = Application::query();
+            if ($x_github_event === 'push' || $action !== 'closed') {
+                $applications->where('git_branch', $matched_branch);
+            }
+            $applications = $this->manualWebhookApplications($applications, $full_name);
+            if ($applications->isEmpty()) {
+                return $this->unauthenticatedManualWebhookResponse($failure_key, $failure_attempt);
             }
             $applicationsByServer = $applications->groupBy(function ($app) {
                 return $app->destination->server_id;
@@ -104,13 +113,26 @@ class Github extends Controller
             foreach ($applicationsByServer as $serverId => $serverApplications) {
                 foreach ($serverApplications as $application) {
                     $webhook_secret = data_get($application, 'manual_webhook_secret_github');
-                    $hmac = hash_hmac('sha256', $request->getContent(), $webhook_secret);
-                    if (! hash_equals($x_hub_signature_256, $hmac) && ! isDev()) {
-                        $return_payloads->push([
-                            'application' => $application->name,
-                            'status' => 'failed',
-                            'message' => 'Invalid signature.',
+                    if (empty($webhook_secret)) {
+                        auditLogWebhookFailure('github', 'webhook_secret_missing', [
+                            'application_uuid' => $application->uuid,
+                            'application_name' => $application->name,
+                            'repository' => $full_name ?? null,
+                            'mode' => 'manual',
                         ]);
+                        $return_payloads->push($this->unauthenticatedManualWebhookFailurePayload());
+
+                        continue;
+                    }
+                    $hmac = hash_hmac('sha256', $request->getContent(), $webhook_secret);
+                    if (! hash_equals($x_hub_signature_256, $hmac)) {
+                        auditLogWebhookFailure('github', 'invalid_signature', [
+                            'application_uuid' => $application->uuid,
+                            'application_name' => $application->name,
+                            'repository' => $full_name ?? null,
+                            'mode' => 'manual',
+                        ]);
+                        $return_payloads->push($this->unauthenticatedManualWebhookFailurePayload());
 
                         continue;
                     }
@@ -126,23 +148,44 @@ class Github extends Controller
                     }
                     if ($x_github_event === 'push') {
                         if ($application->isDeployable()) {
-                            $is_watch_path_triggered = $application->isWatchPathsTriggered($changed_files);
-                            if ($is_watch_path_triggered || is_null($application->watch_paths)) {
-                                $deployment_uuid = new Cuid2;
+                            if ($this->webhookPushMatchesWatchPaths($application, $changed_files)) {
+                                if ($skip_deploy_commits ?? false) {
+                                    $return_payloads->push([
+                                        'application' => $application->name,
+                                        'status' => 'skipped',
+                                        'message' => 'All commits contain [skip cd] or [skip ci]. Skipping deployment.',
+                                        'application_uuid' => $application->uuid,
+                                        'application_name' => $application->name,
+                                    ]);
+
+                                    continue;
+                                }
+                                $deployment_uuid = new_public_id();
                                 $result = queue_application_deployment(
                                     application: $application,
                                     deployment_uuid: $deployment_uuid,
                                     force_rebuild: false,
-                                    commit: data_get($payload, 'after', 'HEAD'),
+                                    commit: $commit ?? 'HEAD',
                                     is_webhook: true,
                                 );
-                                if ($result['status'] === 'skipped') {
+                                if ($result['status'] === 'queue_full') {
+                                    return response($result['message'], 429)->header('Retry-After', 60);
+                                } elseif ($result['status'] === 'skipped') {
                                     $return_payloads->push([
                                         'application' => $application->name,
                                         'status' => 'skipped',
                                         'message' => $result['message'],
                                     ]);
                                 } else {
+                                    auditLog('webhook.deployment.queued', [
+                                        'provider' => 'github',
+                                        'mode' => 'manual',
+                                        'application_uuid' => $application->uuid,
+                                        'application_name' => $application->name,
+                                        'deployment_uuid' => $result['deployment_uuid'],
+                                        'commit' => $commit,
+                                        'repository' => $full_name ?? null,
+                                    ]);
                                     $return_payloads->push([
                                         'application' => $application->name,
                                         'status' => 'success',
@@ -175,133 +218,172 @@ class Github extends Controller
                         }
                     }
                     if ($x_github_event === 'pull_request') {
-                        if ($action === 'opened' || $action === 'synchronize' || $action === 'reopened') {
-                            if ($application->isPRDeployable()) {
-                                // Check if PR deployments from public contributors are restricted
-                                if (! $application->settings->is_pr_deployments_public_enabled) {
-                                    $trustedAssociations = ['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR'];
-                                    if (! in_array($author_association, $trustedAssociations)) {
-                                        $return_payloads->push([
-                                            'application' => $application->name,
-                                            'status' => 'failed',
-                                            'message' => 'PR deployments are restricted to repository members and contributors. Author association: '.$author_association,
-                                        ]);
+                        // Check if PR deployments are enabled (but allow 'closed' action to cleanup)
+                        if (! $application->isPRDeployable() && $action !== 'closed') {
+                            $return_payloads->push([
+                                'application' => $application->name,
+                                'status' => 'failed',
+                                'message' => 'Preview deployments disabled.',
+                            ]);
 
-                                        continue;
-                                    }
-                                }
-                                $deployment_uuid = new Cuid2;
-                                $found = ApplicationPreview::where('application_id', $application->id)->where('pull_request_id', $pull_request_id)->first();
-                                if (! $found) {
-                                    if ($application->build_pack === 'dockercompose') {
-                                        $pr_app = ApplicationPreview::create([
-                                            'git_type' => 'github',
-                                            'application_id' => $application->id,
-                                            'pull_request_id' => $pull_request_id,
-                                            'pull_request_html_url' => $pull_request_html_url,
-                                            'docker_compose_domains' => $application->docker_compose_domains,
-                                        ]);
-                                        $pr_app->generate_preview_fqdn_compose();
-                                    } else {
-                                        $pr_app = ApplicationPreview::create([
-                                            'git_type' => 'github',
-                                            'application_id' => $application->id,
-                                            'pull_request_id' => $pull_request_id,
-                                            'pull_request_html_url' => $pull_request_html_url,
-                                        ]);
-                                        $pr_app->generate_preview_fqdn();
-                                    }
-                                }
-
-                                $result = queue_application_deployment(
-                                    application: $application,
-                                    pull_request_id: $pull_request_id,
-                                    deployment_uuid: $deployment_uuid,
-                                    force_rebuild: false,
-                                    commit: data_get($payload, 'head.sha', 'HEAD'),
-                                    is_webhook: true,
-                                    git_type: 'github'
-                                );
-                                if ($result['status'] === 'skipped') {
-                                    $return_payloads->push([
-                                        'application' => $application->name,
-                                        'status' => 'skipped',
-                                        'message' => $result['message'],
-                                    ]);
-                                } else {
-                                    $return_payloads->push([
-                                        'application' => $application->name,
-                                        'status' => 'success',
-                                        'message' => 'Preview deployment queued.',
-                                    ]);
-                                }
-                            } else {
-                                $return_payloads->push([
-                                    'application' => $application->name,
-                                    'status' => 'failed',
-                                    'message' => 'Preview deployments disabled.',
-                                ]);
-                            }
+                            continue;
                         }
-                        if ($action === 'closed') {
-                            $found = ApplicationPreview::where('application_id', $application->id)->where('pull_request_id', $pull_request_id)->first();
-                            if ($found) {
-                                // Cancel any active deployments for this PR immediately
-                                $activeDeployment = \App\Models\ApplicationDeploymentQueue::where('application_id', $application->id)
-                                    ->where('pull_request_id', $pull_request_id)
-                                    ->whereIn('status', [
-                                        \App\Enums\ApplicationDeploymentStatus::QUEUED->value,
-                                        \App\Enums\ApplicationDeploymentStatus::IN_PROGRESS->value,
-                                    ])
-                                    ->first();
 
-                                if ($activeDeployment) {
-                                    try {
-                                        // Mark deployment as cancelled
-                                        $activeDeployment->update([
-                                            'status' => \App\Enums\ApplicationDeploymentStatus::CANCELLED_BY_USER->value,
-                                        ]);
+                        ProcessGithubPullRequestWebhook::dispatch(
+                            applicationId: $application->id,
+                            githubAppId: null,
+                            action: $action,
+                            pullRequestId: $pull_request_id,
+                            pullRequestHtmlUrl: $pull_request_html_url,
+                            pullRequestTitle: $pull_request_title,
+                            beforeSha: $before_sha,
+                            afterSha: $after_sha,
+                            commitSha: $commit_sha,
+                            authorAssociation: $author_association,
+                            fullName: $full_name,
+                            isForkPullRequest: $is_fork_pull_request,
+                        );
 
-                                        // Add cancellation log entry
-                                        $activeDeployment->addLogEntry('Deployment cancelled: Pull request closed.', 'stderr');
-
-                                        // Check if helper container exists and kill it
-                                        $deployment_uuid = $activeDeployment->deployment_uuid;
-                                        $server = $application->destination->server;
-                                        $checkCommand = "docker ps -a --filter name={$deployment_uuid} --format '{{.Names}}'";
-                                        $containerExists = instant_remote_process([$checkCommand], $server);
-
-                                        if ($containerExists && str($containerExists)->trim()->isNotEmpty()) {
-                                            instant_remote_process(["docker rm -f {$deployment_uuid}"], $server);
-                                            $activeDeployment->addLogEntry('Deployment container stopped.');
-                                        }
-                                    } catch (\Throwable $e) {
-                                        // Silently handle errors during deployment cancellation
-                                    }
-                                }
-
-                                DeleteResourceJob::dispatch($found);
-                                $return_payloads->push([
-                                    'application' => $application->name,
-                                    'status' => 'success',
-                                    'message' => 'Preview deployment closed.',
-                                ]);
-                            } else {
-                                $return_payloads->push([
-                                    'application' => $application->name,
-                                    'status' => 'failed',
-                                    'message' => 'No preview deployment found.',
-                                ]);
-                            }
-                        }
+                        $return_payloads->push([
+                            'application' => $application->name,
+                            'status' => 'queued',
+                            'message' => 'PR webhook received, processing queued.',
+                        ]);
                     }
                 }
             }
 
-            return response($return_payloads);
+            return $this->manualWebhookResponse($return_payloads, $failure_key, $failure_attempt);
+        } catch (InvalidWebhookPayloadException $e) {
+            return response($e->getMessage());
         } catch (Exception $e) {
             return handleError($e);
         }
+    }
+
+    /**
+     * Cuts a webhook string to the varchar(255) column of the runner tables.
+     */
+    private function limitRunnerColumn(mixed $value): ?string
+    {
+        return is_scalar($value) ? mb_substr((string) $value, 0, 255) : null;
+    }
+
+    /**
+     * Handles GitHub Actions runner demand. Every lookup is scoped to the App whose signature was verified.
+     * GitHub can give a job to any idle runner with matching labels, so progress is matched by runner name.
+     */
+    private function handleWorkflowJob(GithubApp $githubApp, Collection $payload)
+    {
+        $action = data_get($payload, 'action');
+        $jobId = (int) data_get($payload, 'workflow_job.id', 0);
+        $runnerName = (string) data_get($payload, 'workflow_job.runner_name', '');
+        if ($jobId <= 0) {
+            return response('Nothing to do. No workflow job found.');
+        }
+        // A public App can be installed by other accounts; only its own installation may use the runners.
+        $installationId = data_get($payload, 'installation.id');
+        if (blank($githubApp->installation_id) || ! is_numeric($installationId) || (int) $installationId !== (int) $githubApp->installation_id) {
+            return response('Nothing to do. The job belongs to another installation of the GitHub App.');
+        }
+
+        // The columns are varchar(255). A cut URL would be a broken link, so a longer one is not stored.
+        $htmlUrl = data_get($payload, 'workflow_job.html_url');
+        $jobDetails = array_filter([
+            'workflow_job_id' => $jobId,
+            'workflow_job_html_url' => is_string($htmlUrl) && mb_strlen($htmlUrl) <= 255 ? $htmlUrl : null,
+            'workflow_name' => $this->limitRunnerColumn(data_get($payload, 'workflow_job.workflow_name')),
+            'job_name' => $this->limitRunnerColumn(data_get($payload, 'workflow_job.name')),
+            'repository_full_name' => $this->limitRunnerColumn(data_get($payload, 'repository.full_name')),
+        ], fn ($value) => filled($value));
+
+        if ($action === 'queued') {
+            $labels = array_values(array_filter((array) data_get($payload, 'workflow_job.labels', []), 'is_string'));
+            $matchingConfigs = $githubApp->runnerConfigs()
+                ->where('is_enabled', true)
+                ->get()
+                ->filter(fn (GithubRunnerConfig $config) => $config->matchesLabels($labels));
+            if ($matchingConfigs->isEmpty()) {
+                return response('Nothing to do. No runner configuration matches the job labels.');
+            }
+            $isPullRequest = $matchingConfigs->contains(fn (GithubRunnerConfig $config) => ! $config->allow_pull_requests)
+                && $this->isPullRequestWorkflowJob($githubApp, $payload);
+            if ($isPullRequest && ! $matchingConfigs->contains('allow_pull_requests', true)) {
+                return response('Nothing to do. The runner configuration does not allow pull request jobs.');
+            }
+
+            $execution = GithubRunnerExecution::createOrFirst(
+                ['github_app_id' => $githubApp->id, 'trigger_workflow_job_id' => $jobId],
+                [...$jobDetails, 'labels' => $labels, 'is_pull_request' => $isPullRequest, 'status' => GithubRunnerStatus::Queued, 'queued_at' => now()],
+            );
+            if ($execution->wasRecentlyCreated) {
+                ProvisionGithubRunnerJob::dispatch($execution->id);
+            }
+
+            return response('Runner queued.');
+        }
+
+        $execution = filled($runnerName)
+            ? GithubRunnerExecution::query()->where('github_app_id', $githubApp->id)->where('runner_name', $runnerName)->first()
+            : null;
+
+        // The completed hook can arrive before the in_progress hook.
+        if (in_array($action, ['in_progress', 'completed'], true) && $execution && in_array($execution->status, [GithubRunnerStatus::Provisioning, GithubRunnerStatus::Idle], true)) {
+            $replacement = $execution->assignJob($jobId, $jobDetails);
+            if ($replacement) {
+                ProvisionGithubRunnerJob::dispatch($replacement->id);
+            }
+            if ($action === 'in_progress') {
+                return response('Runner marked running.');
+            }
+        }
+
+        if ($action === 'completed') {
+            if ($execution) {
+                $execution->update([...$jobDetails, 'conclusion' => $this->limitRunnerColumn(data_get($payload, 'workflow_job.conclusion'))]);
+                if ($execution->isActive() || $execution->status === GithubRunnerStatus::Failed) {
+                    $execution->finish(GithubRunnerStatus::Completed);
+                    CleanupGithubRunnerJob::dispatch($execution->id);
+                }
+
+                return response('Runner cleanup queued.');
+            }
+
+            // The job ended without a Coolify runner, so its queued runner is no longer needed.
+            GithubRunnerExecution::query()
+                ->where('github_app_id', $githubApp->id)
+                ->where('trigger_workflow_job_id', $jobId)
+                ->where('status', GithubRunnerStatus::Queued)
+                ->first()
+                ?->finish(GithubRunnerStatus::Cancelled, 'The job ended before a runner started.');
+
+            return response('Queued runner cancelled.');
+        }
+
+        return response('Nothing to do.');
+    }
+
+    /**
+     * Whether a queued job belongs to a workflow run started by a pull request, so no runner is started
+     * for a job that the job-started hook would refuse. The `workflow_job` payload has no event, so the
+     * run is read from GitHub. When that fails, the job counts as no pull request job and the hook still
+     * refuses it in the runner.
+     */
+    private function isPullRequestWorkflowJob(GithubApp $githubApp, Collection $payload): bool
+    {
+        $runId = (int) data_get($payload, 'workflow_job.run_id', 0);
+        $repository = (string) data_get($payload, 'repository.full_name', '');
+        if ($runId <= 0 || ! str_contains($repository, '/')) {
+            return false;
+        }
+
+        try {
+            $event = (new GithubRunnerApi($githubApp))->workflowRunEvent($repository, $runId);
+        } catch (\Throwable) {
+            return false;
+        }
+
+        return in_array($event, GithubRunnerContainer::PULL_REQUEST_EVENTS, true);
     }
 
     public function normal(Request $request)
@@ -310,33 +392,9 @@ class Github extends Controller
             $return_payloads = collect([]);
             $id = null;
             $x_github_delivery = $request->header('X-GitHub-Delivery');
-            if (app()->isDownForMaintenance()) {
-                $epoch = now()->valueOf();
-                $files = Storage::disk('webhooks-during-maintenance')->files();
-                $github_delivery_found = collect($files)->filter(function ($file) use ($x_github_delivery) {
-                    return Str::contains($file, $x_github_delivery);
-                })->first();
-                if ($github_delivery_found) {
-                    return;
-                }
-                $data = [
-                    'attributes' => $request->attributes->all(),
-                    'request' => $request->request->all(),
-                    'query' => $request->query->all(),
-                    'server' => $request->server->all(),
-                    'files' => $request->files->all(),
-                    'cookies' => $request->cookies->all(),
-                    'headers' => $request->headers->all(),
-                    'content' => $request->getContent(),
-                ];
-                $json = json_encode($data);
-                Storage::disk('webhooks-during-maintenance')->put("{$epoch}_Github::normal_{$x_github_delivery}", $json);
-
-                return;
-            }
-            $x_github_event = Str::lower($request->header('X-GitHub-Event'));
+            $x_github_event = Str::lower((string) $request->header('X-GitHub-Event'));
             $x_github_hook_installation_target_id = $request->header('X-GitHub-Hook-Installation-Target-Id');
-            $x_hub_signature_256 = Str::after($request->header('X-Hub-Signature-256'), 'sha256=');
+            $x_hub_signature_256 = Str::after((string) $request->header('X-Hub-Signature-256'), 'sha256=');
             $payload = $request->collect();
             if ($x_github_event === 'ping') {
                 // Just pong
@@ -347,9 +405,26 @@ class Github extends Controller
                 return response('Nothing to do. No GitHub App found.');
             }
             $webhook_secret = data_get($github_app, 'webhook_secret');
+            if (empty($webhook_secret)) {
+                auditLogWebhookFailure('github', 'webhook_secret_missing', [
+                    'mode' => 'app',
+                    'github_app_id' => $github_app->id,
+                    'github_app_name' => $github_app->name,
+                    'installation_target_id' => $x_github_hook_installation_target_id,
+                ]);
+
+                return response('Invalid signature.');
+            }
             $hmac = hash_hmac('sha256', $request->getContent(), $webhook_secret);
             if (config('app.env') !== 'local') {
                 if (! hash_equals($x_hub_signature_256, $hmac)) {
+                    auditLogWebhookFailure('github', 'invalid_signature', [
+                        'mode' => 'app',
+                        'github_app_id' => $github_app->id,
+                        'github_app_name' => $github_app->name,
+                        'installation_target_id' => $x_github_hook_installation_target_id,
+                    ]);
+
                     return response('Invalid signature.');
                 }
             }
@@ -362,30 +437,48 @@ class Github extends Controller
 
                 return response('cool');
             }
+            if ($x_github_event === 'workflow_job') {
+                return $this->handleWorkflowJob($github_app, $payload);
+            }
             if ($x_github_event === 'push') {
-                $id = data_get($payload, 'repository.id');
-                $branch = data_get($payload, 'ref');
-                if (Str::isMatch('/refs\/heads\/*/', $branch)) {
-                    $branch = Str::after($branch, 'refs/heads/');
-                }
-                $added_files = data_get($payload, 'commits.*.added');
-                $removed_files = data_get($payload, 'commits.*.removed');
-                $modified_files = data_get($payload, 'commits.*.modified');
-                $changed_files = collect($added_files)->concat($removed_files)->concat($modified_files)->unique()->flatten();
+                $id = $this->webhookPayloadDatabaseId($payload, 'repository.id');
+                $branch = $this->webhookPushBranch(data_get($payload, 'ref'));
+                $commit = $this->webhookCommitSha($payload, 'after');
+                $changed_files = $this->webhookPushChangedFiles($payload);
+                $skip_deploy_commits = self::shouldSkipDeploy($this->webhookPushCommitMessages($payload));
             }
             if ($x_github_event === 'pull_request') {
-                $action = data_get($payload, 'action');
-                $id = data_get($payload, 'repository.id');
-                $pull_request_id = data_get($payload, 'number');
-                $pull_request_html_url = data_get($payload, 'pull_request.html_url');
-                $branch = data_get($payload, 'pull_request.head.ref');
-                $base_branch = data_get($payload, 'pull_request.base.ref');
-                $author_association = data_get($payload, 'pull_request.author_association');
+                $id = $this->webhookPayloadDatabaseId($payload, 'repository.id');
+                [
+                    'action' => $action,
+                    'pull_request_id' => $pull_request_id,
+                    'pull_request_html_url' => $pull_request_html_url,
+                    'pull_request_title' => $pull_request_title,
+                    'branch' => $branch,
+                    'base_branch' => $base_branch,
+                    'before_sha' => $before_sha,
+                    'after_sha' => $after_sha,
+                    'commit_sha' => $commit_sha,
+                    'author_association' => $author_association,
+                    'is_fork_pull_request' => $is_fork_pull_request,
+                ] = $this->readPullRequestPayload($payload);
+                $full_name = $this->manualWebhookRepositoryFullName(data_get($payload, 'repository.full_name'));
+                if ($full_name === null) {
+                    return response('Nothing to do. Invalid repository.');
+                }
             }
-            if (! $id || ! $branch) {
+            if (! in_array($x_github_event, ['push', 'pull_request'])) {
+                return response("Nothing to do. Event '$x_github_event' is not supported.");
+            }
+            if (! $id || ! $branch || ($x_github_event === 'pull_request' && $action !== 'closed' && ! $base_branch)) {
                 return response('Nothing to do. No id or branch found.');
             }
-            $applications = Application::where('repository_project_id', $id)->whereRelation('source', 'is_public', false);
+            if ($x_github_event === 'push' && $this->isWebhookBranchDeletionPush($payload)) {
+                return response('Nothing to do. Branch deleted.');
+            }
+            $applications = Application::where('repository_project_id', $id)
+                ->where('source_id', $github_app->id)
+                ->whereRelation('source', 'is_public', false);
             if ($x_github_event === 'push') {
                 $applications = $applications->where('git_branch', $branch)->get();
                 if ($applications->isEmpty()) {
@@ -393,7 +486,10 @@ class Github extends Controller
                 }
             }
             if ($x_github_event === 'pull_request') {
-                $applications = $applications->where('git_branch', $base_branch)->get();
+                if ($action !== 'closed') {
+                    $applications->where('git_branch', $base_branch);
+                }
+                $applications = $applications->get();
                 if ($applications->isEmpty()) {
                     return response("Nothing to do. No applications found with branch '$base_branch'.");
                 }
@@ -417,22 +513,46 @@ class Github extends Controller
                     }
                     if ($x_github_event === 'push') {
                         if ($application->isDeployable()) {
-                            $is_watch_path_triggered = $application->isWatchPathsTriggered($changed_files);
-                            if ($is_watch_path_triggered || is_null($application->watch_paths)) {
-                                $deployment_uuid = new Cuid2;
+                            if ($this->webhookPushMatchesWatchPaths($application, $changed_files)) {
+                                if ($skip_deploy_commits ?? false) {
+                                    $return_payloads->push([
+                                        'application' => $application->name,
+                                        'status' => 'skipped',
+                                        'message' => 'All commits contain [skip cd] or [skip ci]. Skipping deployment.',
+                                        'application_uuid' => $application->uuid,
+                                        'application_name' => $application->name,
+                                    ]);
+
+                                    continue;
+                                }
+                                $deployment_uuid = new_public_id();
                                 $result = queue_application_deployment(
                                     application: $application,
                                     deployment_uuid: $deployment_uuid,
-                                    commit: data_get($payload, 'after', 'HEAD'),
+                                    commit: $commit ?? 'HEAD',
                                     force_rebuild: false,
                                     is_webhook: true,
                                 );
+                                if ($result['status'] === 'queue_full') {
+                                    return response($result['message'], 429)->header('Retry-After', 60);
+                                }
+                                if ($result['status'] !== 'skipped' && ! empty($result['deployment_uuid'])) {
+                                    auditLog('webhook.deployment.queued', [
+                                        'provider' => 'github',
+                                        'mode' => 'app',
+                                        'application_uuid' => $application->uuid,
+                                        'application_name' => $application->name,
+                                        'deployment_uuid' => $result['deployment_uuid'],
+                                        'commit' => $commit,
+                                        'github_app_id' => $github_app->id,
+                                    ]);
+                                }
                                 $return_payloads->push([
                                     'status' => $result['status'],
                                     'message' => $result['message'],
                                     'application_uuid' => $application->uuid,
                                     'application_name' => $application->name,
-                                    'deployment_uuid' => $result['deployment_uuid'],
+                                    'deployment_uuid' => $result['deployment_uuid'] ?? null,
                                 ]);
                             } else {
                                 $paths = str($application->watch_paths)->explode("\n");
@@ -457,201 +577,301 @@ class Github extends Controller
                         }
                     }
                     if ($x_github_event === 'pull_request') {
-                        if ($action === 'opened' || $action === 'synchronize' || $action === 'reopened') {
-                            if ($application->isPRDeployable()) {
-                                // Check if PR deployments from public contributors are restricted
-                                if (! $application->settings->is_pr_deployments_public_enabled) {
-                                    $trustedAssociations = ['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR'];
-                                    if (! in_array($author_association, $trustedAssociations)) {
-                                        $return_payloads->push([
-                                            'application' => $application->name,
-                                            'status' => 'failed',
-                                            'message' => 'PR deployments are restricted to repository members and contributors. Author association: '.$author_association,
-                                        ]);
+                        // Check if PR deployments are enabled (but allow 'closed' action to cleanup)
+                        if (! $application->isPRDeployable() && $action !== 'closed') {
+                            $return_payloads->push([
+                                'application' => $application->name,
+                                'status' => 'failed',
+                                'message' => 'Preview deployments disabled.',
+                            ]);
 
-                                        continue;
-                                    }
-                                }
-                                $deployment_uuid = new Cuid2;
-                                $found = ApplicationPreview::where('application_id', $application->id)->where('pull_request_id', $pull_request_id)->first();
-                                if (! $found) {
-                                    ApplicationPreview::create([
-                                        'git_type' => 'github',
-                                        'application_id' => $application->id,
-                                        'pull_request_id' => $pull_request_id,
-                                        'pull_request_html_url' => $pull_request_html_url,
-                                    ]);
-                                }
-                                $result = queue_application_deployment(
-                                    application: $application,
-                                    pull_request_id: $pull_request_id,
-                                    deployment_uuid: $deployment_uuid,
-                                    force_rebuild: false,
-                                    commit: data_get($payload, 'head.sha', 'HEAD'),
-                                    is_webhook: true,
-                                    git_type: 'github'
-                                );
-                                if ($result['status'] === 'skipped') {
-                                    $return_payloads->push([
-                                        'application' => $application->name,
-                                        'status' => 'skipped',
-                                        'message' => $result['message'],
-                                    ]);
-                                } else {
-                                    $return_payloads->push([
-                                        'application' => $application->name,
-                                        'status' => 'success',
-                                        'message' => 'Preview deployment queued.',
-                                    ]);
-                                }
-                            } else {
-                                $return_payloads->push([
-                                    'application' => $application->name,
-                                    'status' => 'failed',
-                                    'message' => 'Preview deployments disabled.',
-                                ]);
-                            }
+                            continue;
                         }
-                        if ($action === 'closed' || $action === 'close') {
-                            $found = ApplicationPreview::where('application_id', $application->id)->where('pull_request_id', $pull_request_id)->first();
-                            if ($found) {
-                                // Cancel any active deployments for this PR immediately
-                                $activeDeployment = \App\Models\ApplicationDeploymentQueue::where('application_id', $application->id)
-                                    ->where('pull_request_id', $pull_request_id)
-                                    ->whereIn('status', [
-                                        \App\Enums\ApplicationDeploymentStatus::QUEUED->value,
-                                        \App\Enums\ApplicationDeploymentStatus::IN_PROGRESS->value,
-                                    ])
-                                    ->first();
 
-                                if ($activeDeployment) {
-                                    try {
-                                        // Mark deployment as cancelled
-                                        $activeDeployment->update([
-                                            'status' => \App\Enums\ApplicationDeploymentStatus::CANCELLED_BY_USER->value,
-                                        ]);
+                        ProcessGithubPullRequestWebhook::dispatch(
+                            applicationId: $application->id,
+                            githubAppId: $github_app->id,
+                            action: $action,
+                            pullRequestId: $pull_request_id,
+                            pullRequestHtmlUrl: $pull_request_html_url,
+                            pullRequestTitle: $pull_request_title,
+                            beforeSha: $before_sha,
+                            afterSha: $after_sha,
+                            commitSha: $commit_sha,
+                            authorAssociation: $author_association,
+                            fullName: $full_name,
+                            isForkPullRequest: $is_fork_pull_request,
+                        );
 
-                                        // Add cancellation log entry
-                                        $activeDeployment->addLogEntry('Deployment cancelled: Pull request closed.', 'stderr');
-
-                                        // Check if helper container exists and kill it
-                                        $deployment_uuid = $activeDeployment->deployment_uuid;
-                                        $server = $application->destination->server;
-                                        $checkCommand = "docker ps -a --filter name={$deployment_uuid} --format '{{.Names}}'";
-                                        $containerExists = instant_remote_process([$checkCommand], $server);
-
-                                        if ($containerExists && str($containerExists)->trim()->isNotEmpty()) {
-                                            instant_remote_process(["docker rm -f {$deployment_uuid}"], $server);
-                                            $activeDeployment->addLogEntry('Deployment container stopped.');
-                                        }
-
-                                    } catch (\Throwable $e) {
-                                        // Silently handle errors during deployment cancellation
-                                    }
-                                }
-
-                                // Clean up any deployed containers
-                                $containers = getCurrentApplicationContainerStatus($application->destination->server, $application->id, $pull_request_id);
-                                if ($containers->isNotEmpty()) {
-                                    $containers->each(function ($container) use ($application) {
-                                        $container_name = data_get($container, 'Names');
-                                        instant_remote_process(["docker rm -f $container_name"], $application->destination->server);
-                                    });
-                                }
-
-                                ApplicationPullRequestUpdateJob::dispatchSync(application: $application, preview: $found, status: ProcessStatus::CLOSED);
-
-                                DeleteResourceJob::dispatch($found);
-
-                                $return_payloads->push([
-                                    'application' => $application->name,
-                                    'status' => 'success',
-                                    'message' => 'Preview deployment closed.',
-                                ]);
-                            } else {
-                                $return_payloads->push([
-                                    'application' => $application->name,
-                                    'status' => 'failed',
-                                    'message' => 'No preview deployment found.',
-                                ]);
-                            }
-                        }
+                        $return_payloads->push([
+                            'application' => $application->name,
+                            'status' => 'queued',
+                            'message' => 'PR webhook received, processing queued.',
+                        ]);
                     }
                 }
             }
 
             return response($return_payloads);
+        } catch (InvalidWebhookPayloadException $e) {
+            return response($e->getMessage());
         } catch (Exception $e) {
             return handleError($e);
         }
+    }
+
+    /**
+     * Read and validate the pull_request payload fields that the handlers use.
+     *
+     * @return array{action: string, pull_request_id: int, pull_request_html_url: string, pull_request_title: ?string, branch: ?string, base_branch: ?string, before_sha: ?string, after_sha: ?string, commit_sha: string, author_association: ?string, is_fork_pull_request: bool}
+     *
+     * @throws InvalidWebhookPayloadException When a field has a wrong type or format.
+     */
+    private function readPullRequestPayload(mixed $payload): array
+    {
+        $head_sha = $this->webhookCommitSha($payload, 'pull_request.head.sha');
+
+        return [
+            'action' => $this->webhookPayloadString($payload, 'action', required: true),
+            'pull_request_id' => $this->webhookPullRequestId($payload, 'number'),
+            'pull_request_html_url' => $this->webhookPayloadUrl($payload, 'pull_request.html_url', required: true),
+            'pull_request_title' => $this->webhookPayloadString($payload, 'pull_request.title'),
+            'branch' => $this->webhookString(data_get($payload, 'pull_request.head.ref')),
+            'base_branch' => $this->webhookString(data_get($payload, 'pull_request.base.ref')),
+            'before_sha' => $this->webhookCommitSha($payload, 'before'),
+            'after_sha' => $this->webhookCommitSha($payload, 'after') ?? $head_sha,
+            'commit_sha' => $head_sha ?? 'HEAD',
+            'author_association' => $this->webhookPayloadString($payload, 'pull_request.author_association'),
+            'is_fork_pull_request' => $this->isForkPullRequest($payload),
+        ];
+    }
+
+    /**
+     * Determine whether a pull_request webhook payload originates from a fork.
+     *
+     * GitHub's `author_association` is not a reliable trust signal (it grants
+     * CONTRIBUTOR to anyone who has merely opened an issue/PR before), so fork
+     * detection is gated on whether the PR crosses repository boundaries.
+     *
+     * The repository id comparison is the canonical signal; the `head.repo.fork`
+     * flag and a case-insensitive full_name comparison are fallbacks for payloads
+     * where the ids are unavailable (e.g. a deleted head repository).
+     *
+     * @throws InvalidWebhookPayloadException When a repository id is not a positive integer.
+     */
+    private function isForkPullRequest(mixed $payload): bool
+    {
+        $headRepoId = $this->webhookPayloadId($payload, 'pull_request.head.repo.id');
+        $baseRepoId = $this->webhookPayloadId($payload, 'pull_request.base.repo.id');
+
+        if ($headRepoId !== null && $baseRepoId !== null) {
+            return $headRepoId !== $baseRepoId;
+        }
+
+        if (data_get($payload, 'pull_request.head.repo.fork') === true) {
+            return true;
+        }
+
+        $headRepoFullName = data_get($payload, 'pull_request.head.repo.full_name');
+        $baseRepoFullName = data_get($payload, 'pull_request.base.repo.full_name');
+
+        if (is_string($headRepoFullName) && is_string($baseRepoFullName)) {
+            return Str::lower($headRepoFullName) !== Str::lower($baseRepoFullName);
+        }
+
+        return false;
     }
 
     public function redirect(Request $request)
     {
-        try {
-            $code = $request->get('code');
-            $state = $request->get('state');
-            $github_app = GithubApp::where('uuid', $state)->firstOrFail();
-            $api_url = data_get($github_app, 'api_url');
-            $data = Http::withBody(null)->accept('application/vnd.github+json')->post("$api_url/app-manifests/$code/conversions")->throw()->json();
-            $id = data_get($data, 'id');
-            $slug = data_get($data, 'slug');
-            $client_id = data_get($data, 'client_id');
-            $client_secret = data_get($data, 'client_secret');
-            $private_key = data_get($data, 'pem');
-            $webhook_secret = data_get($data, 'webhook_secret');
-            $private_key = PrivateKey::create([
-                'name' => "github-app-{$slug}",
-                'private_key' => $private_key,
-                'team_id' => $github_app->team_id,
-                'is_git_related' => true,
-            ]);
-            $github_app->name = $slug;
-            $github_app->app_id = $id;
-            $github_app->client_id = $client_id;
-            $github_app->client_secret = $client_secret;
-            $github_app->webhook_secret = $webhook_secret;
-            $github_app->private_key_id = $private_key->id;
-            $github_app->save();
+        $code = (string) $request->query('code', '');
+        abort_if(blank($code), 422, 'Missing GitHub App manifest code.');
 
-            return redirect()->route('source.github.show', ['github_app_uuid' => $github_app->uuid]);
-        } catch (Exception $e) {
-            return handleError($e);
-        }
+        $github_app = $this->consumeGithubAppSetupState(
+            request: $request,
+            state: (string) $request->query('state', ''),
+            action: 'manifest',
+        );
+
+        abort_if($this->githubAppHasManifestCredentials($github_app), 403, 'GitHub App credentials are already configured.');
+
+        $api_url = data_get($github_app, 'api_url');
+        $data = Http::GitSource($api_url)->withBody(null)
+            ->accept('application/vnd.github+json')
+            ->timeout(10)
+            ->connectTimeout(5)
+            ->post("$api_url/app-manifests/$code/conversions")
+            ->throw()
+            ->json();
+
+        $id = data_get($data, 'id');
+        $slug = data_get($data, 'slug');
+        $client_id = data_get($data, 'client_id');
+        $client_secret = data_get($data, 'client_secret');
+        $private_key = data_get($data, 'pem');
+        $webhook_secret = data_get($data, 'webhook_secret');
+
+        abort_if(blank($id) || blank($slug) || blank($client_id) || blank($client_secret) || blank($private_key) || blank($webhook_secret), 422, 'GitHub App manifest conversion response is incomplete.');
+
+        $private_key = PrivateKey::create([
+            'name' => "github-app-{$slug}",
+            'private_key' => $private_key,
+            'team_id' => $github_app->team_id,
+            'is_git_related' => true,
+        ]);
+        $github_app->name = $slug;
+        $github_app->app_id = $id;
+        $github_app->client_id = $client_id;
+        $github_app->client_secret = $client_secret;
+        $github_app->webhook_secret = $webhook_secret;
+        $github_app->private_key_id = $private_key->id;
+        $github_app->save();
+
+        return redirect()->route('source.github.show', ['github_app_uuid' => $github_app->uuid]);
     }
 
     public function install(Request $request)
     {
-        try {
-            $installation_id = $request->get('installation_id');
-            if (app()->isDownForMaintenance()) {
-                $epoch = now()->valueOf();
-                $data = [
-                    'attributes' => $request->attributes->all(),
-                    'request' => $request->request->all(),
-                    'query' => $request->query->all(),
-                    'server' => $request->server->all(),
-                    'files' => $request->files->all(),
-                    'cookies' => $request->cookies->all(),
-                    'headers' => $request->headers->all(),
-                    'content' => $request->getContent(),
-                ];
-                $json = json_encode($data);
-                Storage::disk('webhooks-during-maintenance')->put("{$epoch}_Github::install_{$installation_id}", $json);
+        $setup_action = (string) $request->query('setup_action', '');
+        abort_unless(in_array($setup_action, ['install', 'update'], true), 422, 'Invalid GitHub App setup action.');
 
-                return;
-            }
-            $source = $request->get('source');
-            $setup_action = $request->get('setup_action');
-            $github_app = GithubApp::where('uuid', $source)->firstOrFail();
-            if ($setup_action === 'install') {
-                $github_app->installation_id = $installation_id;
-                $github_app->save();
-            }
+        $installation_id = (string) $request->query('installation_id', '');
+        abort_unless(ctype_digit($installation_id), 422, 'Missing GitHub App installation id.');
 
-            return redirect()->route('source.github.show', ['github_app_uuid' => $github_app->uuid]);
-        } catch (Exception $e) {
-            return handleError($e);
+        if ($setup_action === 'update') {
+            return $this->redirectAfterGithubAppInstallationUpdate($installation_id);
         }
+
+        $github_app = $this->consumeGithubAppSetupState(
+            request: $request,
+            state: (string) $request->query('state', ''),
+            action: 'install',
+        );
+
+        $verification_error = $this->githubInstallationVerificationError($github_app, $installation_id);
+        if ($verification_error) {
+            Log::warning('GitHub App installation could not be verified.', [
+                'github_app_id' => $github_app->id,
+                'installation_id' => $installation_id,
+                'reason' => $verification_error,
+            ]);
+
+            $message = "GitHub App installation could not be verified: {$verification_error}";
+            abort_if($request->expectsJson(), 403, $message);
+
+            return redirect()
+                ->route('source.github.show', ['github_app_uuid' => $github_app->uuid])
+                ->with('error', $message);
+        }
+
+        $github_app->installation_id = $installation_id;
+        $github_app->save();
+
+        return redirect()->route('source.github.show', ['github_app_uuid' => $github_app->uuid]);
+    }
+
+    private function redirectAfterGithubAppInstallationUpdate(string $installation_id): RedirectResponse
+    {
+        $github_app = GithubApp::ownedByCurrentTeam()
+            ->where('installation_id', $installation_id)
+            ->first();
+
+        if ($github_app) {
+            return redirect()->route('source.github.show', ['github_app_uuid' => $github_app->uuid]);
+        }
+
+        return redirect()->route('source.all');
+    }
+
+    /**
+     * Verify that the given installation id actually belongs to this GitHub App.
+     *
+     * The installation id arrives as an untrusted query parameter on an
+     * unauthenticated-reachable GET callback, so it must be confirmed against
+     * the GitHub API using the App's own credentials before it is persisted.
+     *
+     * @return string|null The reason the verification failed, or null when it passed.
+     */
+    private function githubInstallationVerificationError(GithubApp $github_app, string $installation_id): ?string
+    {
+        if (blank($github_app->app_id) || blank(githubAppPrivateKey($github_app)?->private_key)) {
+            return 'The GitHub App ID or private key is missing.';
+        }
+
+        try {
+            $jwt = generateGithubJwt($github_app);
+            $response = Http::GitSource($github_app->api_url)->withHeaders([
+                'Authorization' => "Bearer $jwt",
+                'Accept' => 'application/vnd.github+json',
+            ])
+                ->timeout(10)
+                ->connectTimeout(5)
+                ->get("{$github_app->api_url}/app/installations/{$installation_id}");
+        } catch (\Throwable $e) {
+            return strip_tags(str_replace('<br>', ' ', $e->getMessage()));
+        }
+
+        if (! $response->successful()) {
+            return "GitHub API returned HTTP {$response->status()}: ".data_get($response->json(), 'message', 'no error message found');
+        }
+
+        if ((string) data_get($response->json(), 'app_id') !== (string) $github_app->app_id) {
+            return 'The installation belongs to a different GitHub App.';
+        }
+
+        return null;
+    }
+
+    private function consumeGithubAppSetupState(Request $request, string $state, string $action): GithubApp
+    {
+        if (blank($state)) {
+            $this->rejectInvalidGithubAppSetupState($request);
+        }
+
+        $payload = Cache::pull($this->githubAppSetupStateCacheKey($state));
+        if (! is_array($payload) || data_get($payload, 'action') !== $action) {
+            $this->rejectInvalidGithubAppSetupState($request);
+        }
+
+        // The state is bound to the team that started the setup. The user may have switched
+        // teams while on GitHub, so check membership of that team, not the session team.
+        $team_id = (int) data_get($payload, 'team_id');
+        abort_unless((bool) $request->user()?->teams->contains('id', $team_id), 403);
+
+        $github_app = GithubApp::whereKey(data_get($payload, 'github_app_id'))
+            ->where('team_id', $team_id)
+            ->firstOrFail();
+
+        if ($request->user()->currentTeam()?->id !== $team_id) {
+            refreshSession($github_app->team);
+        }
+
+        return $github_app;
+    }
+
+    private function rejectInvalidGithubAppSetupState(Request $request): never
+    {
+        if ($request->expectsJson()) {
+            abort(404);
+        }
+
+        throw new HttpResponseException(
+            redirect()
+                ->route('source.all')
+        );
+    }
+
+    private function githubAppSetupStateCacheKey(string $state): string
+    {
+        return 'github-app-setup-state:'.hash('sha256', $state);
+    }
+
+    private function githubAppHasManifestCredentials(GithubApp $github_app): bool
+    {
+        return filled($github_app->app_id)
+            || filled($github_app->client_id)
+            || filled($github_app->client_secret)
+            || filled($github_app->webhook_secret)
+            || filled($github_app->private_key_id);
     }
 }

@@ -2,11 +2,8 @@
 
 namespace App\Livewire\Server\Security;
 
-use App\Models\InstanceSettings;
 use App\Models\Server;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
 
@@ -34,7 +31,7 @@ class TerminalAccess extends Component
         }
     }
 
-    public function toggleTerminal($password)
+    public function toggleTerminal($password, $selectedActions = [])
     {
         try {
             $this->authorize('update', $this->server);
@@ -44,13 +41,9 @@ class TerminalAccess extends Component
                 throw new \Exception('Only team administrators and owners can modify terminal access.');
             }
 
-            // Verify password unless two-step confirmation is disabled
-            if (! data_get(InstanceSettings::get(), 'disable_two_step_confirmation')) {
-                if (! Hash::check($password, Auth::user()->password)) {
-                    $this->addError('password', 'The provided password is incorrect.');
-
-                    return;
-                }
+            // Verify password
+            if (! verifyPasswordConfirmation($password, $this)) {
+                return 'The provided password is incorrect.';
             }
 
             // Toggle the terminal setting
@@ -61,16 +54,22 @@ class TerminalAccess extends Component
             $this->isTerminalEnabled = $this->server->settings->is_terminal_enabled;
 
             $status = $this->isTerminalEnabled ? 'enabled' : 'disabled';
+            auditLog("ui.server.terminal_access.{$status}", [
+                'team_id' => $this->server->team_id,
+                'server_uuid' => $this->server->uuid,
+                'server_name' => $this->server->name,
+            ]);
             $this->dispatch('success', "Terminal access has been {$status}.");
+
+            return true;
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
     }
 
-    public function syncData(bool $toModel = false)
+    private function syncData(bool $toModel = false): void
     {
         if ($toModel) {
-            $this->authorize('update', $this->server);
             $this->validate();
             // No other fields to sync for terminal access
         } else {

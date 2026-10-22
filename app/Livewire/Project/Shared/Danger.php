@@ -3,15 +3,12 @@
 namespace App\Livewire\Project\Shared;
 
 use App\Jobs\DeleteResourceJob;
-use App\Models\InstanceSettings;
 use App\Models\Service;
 use App\Models\ServiceApplication;
 use App\Models\ServiceDatabase;
+use App\Models\StandaloneSqlite;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
 use Livewire\Component;
-use Visus\Cuid2\Cuid2;
 
 class Danger extends Component
 {
@@ -42,16 +39,16 @@ class Danger extends Component
     public function mount()
     {
         $parameters = get_route_parameters();
-        $this->modalId = new Cuid2;
+        $this->modalId = new_public_id();
         $this->projectUuid = data_get($parameters, 'project_uuid');
         $this->environmentUuid = data_get($parameters, 'environment_uuid');
 
         if ($this->resource === null) {
             if (isset($parameters['service_uuid'])) {
-                $this->resource = Service::where('uuid', $parameters['service_uuid'])->first();
+                $this->resource = Service::ownedByCurrentTeam()->where('uuid', $parameters['service_uuid'])->first();
             } elseif (isset($parameters['stack_service_uuid'])) {
-                $this->resource = ServiceApplication::where('uuid', $parameters['stack_service_uuid'])->first()
-                    ?? ServiceDatabase::where('uuid', $parameters['stack_service_uuid'])->first();
+                $this->resource = ServiceApplication::ownedByCurrentTeam()->where('uuid', $parameters['stack_service_uuid'])->first()
+                    ?? ServiceDatabase::ownedByCurrentTeam()->where('uuid', $parameters['stack_service_uuid'])->first();
             }
         }
 
@@ -76,7 +73,8 @@ class Danger extends Component
             'standalone-mariadb',
             'standalone-keydb',
             'standalone-dragonfly',
-            'standalone-clickhouse' => $this->resource->name ?? 'Database',
+            'standalone-clickhouse',
+            'standalone-sqlite' => $this->resource->name ?? 'Database',
             'service' => $this->resource->name ?? 'Service',
             'service-application' => $this->resource->name ?? 'Service Application',
             'service-database' => $this->resource->name ?? 'Service Database',
@@ -91,34 +89,66 @@ class Danger extends Component
         }
     }
 
-    public function delete($password)
+    public function delete($password, $selectedActions = [])
     {
-        if (! data_get(InstanceSettings::get(), 'disable_two_step_confirmation')) {
-            if (! Hash::check($password, Auth::user()->password)) {
-                $this->addError('password', 'The provided password is incorrect.');
-
-                return;
-            }
+        if (! verifyPasswordConfirmation($password, $this)) {
+            return 'The provided password is incorrect.';
         }
 
         if (! $this->resource) {
-            $this->addError('resource', 'Resource not found.');
+            return 'Resource not found.';
+        }
+
+        if ($this->resource instanceof StandaloneSqlite && $this->resource->hasConnectedApplications()) {
+            $this->dispatch('error', 'This database volume is mounted by '.$this->resource->connectedApplicationNames()->implode(', ').'. Remove those mounts before deleting the database.');
 
             return;
         }
 
+        if (! empty($selectedActions)) {
+            $this->delete_volumes = in_array('delete_volumes', $selectedActions);
+            $this->delete_connected_networks = in_array('delete_connected_networks', $selectedActions);
+            $this->delete_configurations = in_array('delete_configurations', $selectedActions);
+            $this->docker_cleanup = in_array('docker_cleanup', $selectedActions);
+        }
+
         try {
             $this->authorize('delete', $this->resource);
-            $this->resource->delete();
             DeleteResourceJob::dispatch(
                 $this->resource,
                 $this->delete_volumes,
                 $this->delete_connected_networks,
                 $this->delete_configurations,
-                $this->docker_cleanup
-            );
+                $this->docker_cleanup,
+            )->afterResponse();
 
-            return redirect()->route('project.resource.index', [
+            return redirectRoute($this, 'project.resource.index', [
+                'project_uuid' => $this->projectUuid,
+                'environment_uuid' => $this->environmentUuid,
+            ]);
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function deleteFromCoolifyOnly(string $password): mixed
+    {
+        if (! verifyPasswordConfirmation($password, $this)) {
+            return 'The provided password is incorrect.';
+        }
+
+        if (! $this->resource instanceof Service) {
+            return 'Service not found.';
+        }
+
+        try {
+            $this->authorize('delete', $this->resource);
+            DeleteResourceJob::dispatch(
+                resource: $this->resource,
+                deleteFromCoolifyOnly: true,
+            )->afterResponse();
+
+            return redirectRoute($this, 'project.resource.index', [
                 'project_uuid' => $this->projectUuid,
                 'environment_uuid' => $this->environmentUuid,
             ]);

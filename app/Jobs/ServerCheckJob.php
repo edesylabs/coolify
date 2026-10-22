@@ -15,6 +15,8 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Queue\TimeoutExceededException;
+use Illuminate\Support\Facades\Log;
 
 class ServerCheckJob implements ShouldBeEncrypted, ShouldQueue
 {
@@ -33,10 +35,30 @@ class ServerCheckJob implements ShouldBeEncrypted, ShouldQueue
 
     public function __construct(public Server $server) {}
 
+    public function failed(?\Throwable $exception): void
+    {
+        if ($exception instanceof TimeoutExceededException) {
+            Log::warning('ServerCheckJob timed out', [
+                'server_id' => $this->server->id,
+                'server_name' => $this->server->name,
+            ]);
+            $this->server->increment('unreachable_count');
+
+            // Delete the queue job so it doesn't appear in Horizon's failed list.
+            $this->job?->delete();
+        }
+    }
+
     public function handle()
     {
         try {
-            if ($this->server->serverStatus() === false) {
+            // ServerConnectionCheckJob owns reachability. Do not probe SSH again here: one failed
+            // probe would mark the server unreachable without UNREACHABLE_THRESHOLD.
+            if ($this->server->isFunctional() === false) {
+                if ($this->server->settings->is_reachable === false) {
+                    $this->server->markResourcesAsExited();
+                }
+
                 return 'Server is not reachable or not ready.';
             }
 
@@ -69,15 +91,13 @@ class ServerCheckJob implements ShouldBeEncrypted, ShouldQueue
                             $shouldStart = CheckProxy::run($this->server);
                             if ($shouldStart) {
                                 StartProxy::run($this->server, async: false);
-                                $this->server->team?->notify(new ContainerRestarted('coolify-proxy', $this->server));
+                                $this->server->team?->notify(new ContainerRestarted('coolify-proxy', $this->server, restartedResource: $this->server));
                             }
                         } catch (\Throwable $e) {
                         }
                     } else {
                         $this->server->proxy->status = data_get($foundProxyContainer, 'State.Status');
                         $this->server->save();
-                        $connectProxyToDockerNetworks = connectProxyToNetworks($this->server);
-                        instant_remote_process($connectProxyToDockerNetworks, $this->server, false);
                     }
                 }
             }

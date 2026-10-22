@@ -21,15 +21,23 @@ class PushoverNotificationSettings extends Model
         'deployment_success_pushover_notifications',
         'deployment_failure_pushover_notifications',
         'status_change_pushover_notifications',
+        'restart_limit_reached_pushover_notifications',
         'backup_success_pushover_notifications',
         'backup_failure_pushover_notifications',
         'scheduled_task_success_pushover_notifications',
         'scheduled_task_failure_pushover_notifications',
-        'docker_cleanup_pushover_notifications',
+        'docker_cleanup_success_pushover_notifications',
+        'docker_cleanup_failure_pushover_notifications',
         'server_disk_usage_pushover_notifications',
         'server_reachable_pushover_notifications',
         'server_unreachable_pushover_notifications',
         'server_patch_pushover_notifications',
+        'traefik_outdated_pushover_notifications',
+    ];
+
+    protected $hidden = [
+        'pushover_user_key',
+        'pushover_api_token',
     ];
 
     protected $casts = [
@@ -40,6 +48,7 @@ class PushoverNotificationSettings extends Model
         'deployment_success_pushover_notifications' => 'boolean',
         'deployment_failure_pushover_notifications' => 'boolean',
         'status_change_pushover_notifications' => 'boolean',
+        'restart_limit_reached_pushover_notifications' => 'boolean',
         'backup_success_pushover_notifications' => 'boolean',
         'backup_failure_pushover_notifications' => 'boolean',
         'scheduled_task_success_pushover_notifications' => 'boolean',
@@ -49,6 +58,7 @@ class PushoverNotificationSettings extends Model
         'server_reachable_pushover_notifications' => 'boolean',
         'server_unreachable_pushover_notifications' => 'boolean',
         'server_patch_pushover_notifications' => 'boolean',
+        'traefik_outdated_pushover_notifications' => 'boolean',
     ];
 
     public function team()

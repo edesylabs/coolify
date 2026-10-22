@@ -3,6 +3,7 @@
 namespace App\Actions\Server;
 
 use App\Models\Server;
+use Illuminate\Support\Facades\Log;
 use Lorisleiva\Actions\Concerns\AsAction;
 
 class CheckUpdates
@@ -13,6 +14,9 @@ class CheckUpdates
 
     public function handle(Server $server)
     {
+        $osId = 'unknown';
+        $packageManager = null;
+
         try {
             if ($server->serverStatus() === false) {
                 return [
@@ -90,6 +94,25 @@ class CheckUpdates
                     $output = instant_remote_process(['LANG=C apt list --upgradable 2>/dev/null'], $server);
 
                     $out = $this->parseAptOutput($output);
+                    $out['osId'] = $osId;
+                    $out['package_manager'] = $packageManager;
+
+                    return $out;
+                case 'pacman':
+                    // Sync database first, then check for updates
+                    // Using -Sy to refresh package database before querying available updates
+                    instant_remote_process(['pacman -Sy'], $server);
+                    $output = instant_remote_process(['pacman -Qu 2>/dev/null'], $server);
+                    $out = $this->parsePacmanOutput($output);
+                    $out['osId'] = $osId;
+                    $out['package_manager'] = $packageManager;
+
+                    return $out;
+                case 'apk':
+                    instant_remote_process(['apk update -q'], $server);
+                    $output = instant_remote_process(['LANG=C apk list --upgradable 2>/dev/null'], $server);
+
+                    $out = $this->parseApkOutput($output);
                     $out['osId'] = $osId;
                     $out['package_manager'] = $packageManager;
 
@@ -210,6 +233,75 @@ class CheckUpdates
                     'new_version' => $matches[3],
                     'architecture' => $matches[4],
                     'current_version' => $matches[5],
+                ];
+            }
+        }
+
+        return [
+            'total_updates' => count($updates),
+            'updates' => $updates,
+        ];
+    }
+
+    private function parsePacmanOutput(string $output): array
+    {
+        $updates = [];
+        $unparsedLines = [];
+        $lines = explode("\n", $output);
+
+        foreach ($lines as $line) {
+            if (empty($line)) {
+                continue;
+            }
+            // Format: package current_version -> new_version
+            if (preg_match('/^(\S+)\s+(\S+)\s+->\s+(\S+)$/', $line, $matches)) {
+                $updates[] = [
+                    'package' => $matches[1],
+                    'current_version' => $matches[2],
+                    'new_version' => $matches[3],
+                    'architecture' => 'unknown',
+                    'repository' => 'unknown',
+                ];
+            } else {
+                // Log unmatched lines for debugging purposes
+                $unparsedLines[] = $line;
+            }
+        }
+
+        $result = [
+            'total_updates' => count($updates),
+            'updates' => $updates,
+        ];
+
+        // Include unparsed lines in the result for debugging if any exist
+        if (! empty($unparsedLines)) {
+            $result['unparsed_lines'] = $unparsedLines;
+            Log::debug('Pacman output contained unparsed lines', [
+                'unparsed_lines' => $unparsedLines,
+            ]);
+        }
+
+        return $result;
+    }
+
+    private function parseApkOutput(string $output): array
+    {
+        $updates = [];
+        $lines = explode("\n", $output);
+
+        foreach ($lines as $line) {
+            // Skip empty lines
+            if (empty($line)) {
+                continue;
+            }
+
+            // Example line: docker-cli-compose-2.31.0-r5 x86_64 {docker-cli-compose} (Apache-2.0) [upgradable from: docker-cli-compose-2.31.0-r4]
+            if (preg_match('/^(.+)-([0-9]\S*) (\S+) \{\S+\} \([^)]+\) \[upgradable from: .+?-([0-9][^\]]+)\]$/', $line, $matches)) {
+                $updates[] = [
+                    'package' => $matches[1],
+                    'new_version' => $matches[2],
+                    'architecture' => $matches[3],
+                    'current_version' => $matches[4],
                 ];
             }
         }

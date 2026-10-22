@@ -9,12 +9,15 @@ use Livewire\Component;
 
 class DeploymentsIndicator extends Component
 {
-    public bool $expanded = false;
+    /**
+     * Where the indicator is rendered: 'sidebar' (desktop sidebar footer) or 'mobile' (mobile top bar).
+     */
+    public string $variant = 'sidebar';
 
     #[Computed]
     public function deployments()
     {
-        $servers = Server::ownedByCurrentTeam()->get();
+        $servers = Server::ownedByCurrentTeamCached();
 
         return ApplicationDeploymentQueue::with(['application.environment.project'])
             ->whereIn('status', ['in_progress', 'queued'])
@@ -36,11 +39,6 @@ class DeploymentsIndicator extends Component
     public function deploymentCount()
     {
         return $this->deployments->count();
-    }
-
-    public function toggleExpanded()
-    {
-        $this->expanded = ! $this->expanded;
     }
 
     public function render()

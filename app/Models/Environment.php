@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Traits\Auditable;
 use App\Traits\ClearsGlobalSearchCache;
 use App\Traits\HasSafeStringAttribute;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use OpenApi\Attributes as OA;
 
 #[OA\Schema(
@@ -20,10 +22,16 @@ use OpenApi\Attributes as OA;
 )]
 class Environment extends BaseModel
 {
+    use Auditable, HasFactory;
     use ClearsGlobalSearchCache;
     use HasSafeStringAttribute;
 
-    protected $guarded = [];
+    protected $fillable = [
+        'name',
+        'description',
+        'project_id',
+        'uuid',
+    ];
 
     protected static function booted()
     {
@@ -40,6 +48,11 @@ class Environment extends BaseModel
         return Environment::whereRelation('project.team', 'id', currentTeam()->id)->orderBy('name');
     }
 
+    public static function ownedByCurrentTeamAPI(int $teamId)
+    {
+        return Environment::whereRelation('project.team', 'id', $teamId)->orderBy('name');
+    }
+
     public function isEmpty()
     {
         return $this->applications()->count() == 0 &&
@@ -51,12 +64,13 @@ class Environment extends BaseModel
             $this->clickhouses()->count() == 0 &&
             $this->mariadbs()->count() == 0 &&
             $this->mongodbs()->count() == 0 &&
+            $this->sqlites()->count() == 0 &&
             $this->services()->count() == 0;
     }
 
     public function environment_variables()
     {
-        return $this->hasMany(SharedEnvironmentVariable::class);
+        return $this->hasMany(SharedEnvironmentVariable::class)->where('type', 'environment');
     }
 
     public function applications()
@@ -104,6 +118,11 @@ class Environment extends BaseModel
         return $this->hasMany(StandaloneClickhouse::class);
     }
 
+    public function sqlites()
+    {
+        return $this->hasMany(StandaloneSqlite::class);
+    }
+
     public function databases()
     {
         $postgresqls = $this->postgresqls;
@@ -114,8 +133,9 @@ class Environment extends BaseModel
         $keydbs = $this->keydbs;
         $dragonflies = $this->dragonflies;
         $clickhouses = $this->clickhouses;
+        $sqlites = $this->sqlites;
 
-        return $postgresqls->concat($redis)->concat($mongodbs)->concat($mysqls)->concat($mariadbs)->concat($keydbs)->concat($dragonflies)->concat($clickhouses);
+        return $postgresqls->concat($redis)->concat($mongodbs)->concat($mysqls)->concat($mariadbs)->concat($keydbs)->concat($dragonflies)->concat($clickhouses)->concat($sqlites);
     }
 
     public function project()

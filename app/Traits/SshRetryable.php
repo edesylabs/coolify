@@ -40,6 +40,7 @@ trait SshRetryable
             'Remote host closed connection',
             'Authentication failed',
             'Too many authentication failures',
+            'SSH command failed with exit code: 255',
         ];
 
         $lowerErrorOutput = strtolower($errorOutput);
@@ -50,6 +51,23 @@ trait SshRetryable
         }
 
         return false;
+    }
+
+    /**
+     * Check if a failure came from the SSH connection and not from the remote command.
+     *
+     * SSH exits with 255 for its own errors. Any other non-zero exit code comes from the
+     * remote command, whose output can contain words such as "Connection refused" (for
+     * example a failed S3 upload). Retrying would replay commands that already ran.
+     */
+    protected function isRetryableSshFailure(\Throwable $exception): bool
+    {
+        $exitCode = $exception->getCode();
+        if (is_int($exitCode) && $exitCode > 0 && $exitCode !== 255) {
+            return false;
+        }
+
+        return $this->isRetryableSshError($exception->getMessage());
     }
 
     /**
@@ -81,7 +99,6 @@ trait SshRetryable
         $lastErrorMessage = '';
         // Randomly fail the command with a key exchange error for testing
         // if (random_int(1, 10) === 1) { // 10% chance to fail
-        //     ray('SSH key exchange failed: kex_exchange_identification: read: Connection reset by peer');
         //     throw new \RuntimeException('SSH key exchange failed: kex_exchange_identification: read: Connection reset by peer');
         // }
         for ($attempt = 0; $attempt < $maxRetries; $attempt++) {
@@ -92,11 +109,8 @@ trait SshRetryable
                 $lastErrorMessage = $e->getMessage();
 
                 // Check if it's retryable and not the last attempt
-                if ($this->isRetryableSshError($lastErrorMessage) && $attempt < $maxRetries - 1) {
+                if ($this->isRetryableSshFailure($e) && $attempt < $maxRetries - 1) {
                     $delay = $this->calculateRetryDelay($attempt);
-
-                    // Track SSH retry event in Sentry
-                    $this->trackSshRetryEvent($attempt + 1, $maxRetries, $delay, $lastErrorMessage, $context);
 
                     // Add deployment log if available (for ExecuteRemoteCommand trait)
                     if (isset($this->application_deployment_queue) && method_exists($this, 'addRetryLogEntry')) {
@@ -132,43 +146,5 @@ trait SshRetryable
         }
 
         return null;
-    }
-
-    /**
-     * Track SSH retry event in Sentry
-     */
-    protected function trackSshRetryEvent(int $attempt, int $maxRetries, int $delay, string $errorMessage, array $context = []): void
-    {
-        // Only track in production/cloud instances
-        if (isDev() || ! config('constants.sentry.sentry_dsn')) {
-            return;
-        }
-
-        try {
-            app('sentry')->captureMessage(
-                'SSH connection retry triggered',
-                \Sentry\Severity::warning(),
-                [
-                    'extra' => [
-                        'attempt' => $attempt,
-                        'max_retries' => $maxRetries,
-                        'delay_seconds' => $delay,
-                        'error_message' => $errorMessage,
-                        'context' => $context,
-                        'retryable_error' => true,
-                    ],
-                    'tags' => [
-                        'component' => 'ssh_retry',
-                        'error_type' => 'connection_retry',
-                    ],
-                ]
-            );
-        } catch (\Throwable $e) {
-            // Don't let Sentry tracking errors break the SSH retry flow
-            Log::warning('Failed to track SSH retry event in Sentry', [
-                'error' => $e->getMessage(),
-                'original_attempt' => $attempt,
-            ]);
-        }
     }
 }

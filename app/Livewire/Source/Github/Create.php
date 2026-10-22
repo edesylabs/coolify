@@ -3,7 +3,9 @@
 namespace App\Livewire\Source\Github;
 
 use App\Models\GithubApp;
+use App\Rules\SafeExternalUrl;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Validation\ValidationException;
 use Livewire\Component;
 
 class Create extends Component
@@ -24,9 +26,28 @@ class Create extends Component
 
     public bool $is_system_wide = false;
 
+    public bool $use_for_pull_request_previews = true;
+
+    public bool $use_for_github_runners = false;
+
+    private bool $shouldDeriveApiUrlAfterHtmlUrlUpdate = false;
+
     public function mount()
     {
         $this->name = substr(generate_random_name(), 0, 30);
+    }
+
+    public function updatingHtmlUrl(): void
+    {
+        $this->shouldDeriveApiUrlAfterHtmlUrlUpdate = blank($this->api_url)
+            || $this->api_url === githubApiUrlFromHtmlUrl($this->html_url);
+    }
+
+    public function updatedHtmlUrl(): void
+    {
+        if ($this->shouldDeriveApiUrlAfterHtmlUrlUpdate) {
+            $this->api_url = githubApiUrlFromHtmlUrl($this->html_url);
+        }
     }
 
     public function createGitHubApp()
@@ -34,14 +55,23 @@ class Create extends Component
         try {
             $this->authorize('createAnyResource');
 
+            $this->organization = normalizeGithubOrganization($this->organization);
+            $this->api_url = filled($this->api_url)
+                ? $this->api_url
+                : githubApiUrlFromHtmlUrl($this->html_url);
+
             $this->validate([
                 'name' => 'required|string',
-                'organization' => 'nullable|string',
-                'api_url' => 'required|string',
-                'html_url' => 'required|string',
+                'organization' => [$this->use_for_github_runners ? 'required' : 'nullable', 'string', 'regex:/\A[^\s\/?#]+\z/'],
+                'api_url' => ['required', 'string', 'url', SafeExternalUrl::forGitSource()],
+                'html_url' => ['required', 'string', 'url', SafeExternalUrl::forGitSource()],
                 'custom_user' => 'required|string',
                 'custom_port' => 'required|int',
                 'is_system_wide' => 'required|bool',
+                'use_for_pull_request_previews' => 'required|bool',
+                'use_for_github_runners' => 'required|bool',
+            ], [
+                'organization.required' => 'GitHub Actions runners are registered at organization level. Enter the organization.',
             ]);
             $payload = [
                 'name' => $this->name,
@@ -58,7 +88,13 @@ class Create extends Component
                 session(['from' => session('from') + ['source_id' => $github_app->id]]);
             }
 
-            return redirect()->route('source.github.show', ['github_app_uuid' => $github_app->uuid]);
+            return redirectRoute($this, 'source.github.show', [
+                'github_app_uuid' => $github_app->uuid,
+                'previews' => (int) $this->use_for_pull_request_previews,
+                'runners' => (int) $this->use_for_github_runners,
+            ]);
+        } catch (ValidationException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }

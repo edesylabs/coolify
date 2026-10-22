@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\NotificationThrottle;
 use App\Models\Server;
 use App\Notifications\Server\HighDiskUsage;
 use Illuminate\Bus\Queueable;
@@ -10,7 +11,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Queue\TimeoutExceededException;
+use Illuminate\Support\Facades\Log;
 use Laravel\Horizon\Contracts\Silenced;
 
 class ServerStorageCheckJob implements ShouldBeEncrypted, ShouldQueue, Silenced
@@ -28,6 +30,19 @@ class ServerStorageCheckJob implements ShouldBeEncrypted, ShouldQueue, Silenced
 
     public function __construct(public Server $server, public int|string|null $percentage = null) {}
 
+    public function failed(?\Throwable $exception): void
+    {
+        if ($exception instanceof TimeoutExceededException) {
+            Log::warning('ServerStorageCheckJob timed out', [
+                'server_id' => $this->server->id,
+                'server_name' => $this->server->name,
+            ]);
+
+            // Delete the queue job so it doesn't appear in Horizon's failed list.
+            $this->job?->delete();
+        }
+    }
+
     public function handle()
     {
         try {
@@ -44,20 +59,10 @@ class ServerStorageCheckJob implements ShouldBeEncrypted, ShouldQueue, Silenced
                 return 'No percentage could be retrieved.';
             }
             if ($this->percentage > $serverDiskUsageNotificationThreshold) {
-                $executed = RateLimiter::attempt(
-                    'high-disk-usage:'.$this->server->id,
-                    $maxAttempts = 0,
-                    function () use ($team, $serverDiskUsageNotificationThreshold) {
-                        $team->notify(new HighDiskUsage($this->server, $this->percentage, $serverDiskUsageNotificationThreshold));
-                    },
-                    $decaySeconds = 3600,
-                );
-
-                if (! $executed) {
-                    return 'Too many messages sent!';
-                }
-            } else {
-                RateLimiter::hit('high-disk-usage:'.$this->server->id, 600);
+                $team->notify(new HighDiskUsage($this->server, $this->percentage, $serverDiskUsageNotificationThreshold));
+            } elseif (HighDiskUsage::hasRecovered($this->percentage, $serverDiskUsageNotificationThreshold)) {
+                // Usage recovered: the next spike should alert again instead of waiting for the interval.
+                NotificationThrottle::release($this->server, HighDiskUsage::class);
             }
         } catch (\Throwable $e) {
             return handleError($e);

@@ -11,7 +11,6 @@
 use App\Models\Application;
 use App\Models\EnvironmentVariable;
 use Illuminate\Support\Collection;
-use Mockery;
 
 beforeEach(function () {
     // Clean up Mockery after each test
@@ -25,11 +24,6 @@ it('detects PORT environment variable when present', function () {
     // Mock environment variables collection with PORT set to 3000
     $portEnvVar = Mockery::mock(EnvironmentVariable::class);
     $portEnvVar->shouldReceive('getAttribute')->with('real_value')->andReturn('3000');
-
-    $envVars = new Collection([$portEnvVar]);
-    $application->shouldReceive('getAttribute')
-        ->with('environment_variables')
-        ->andReturn($envVars);
 
     // Mock the firstWhere method to return our PORT env var
     $envVars = Mockery::mock(Collection::class);

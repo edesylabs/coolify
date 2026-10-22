@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use OpenApi\Attributes as OA;
 
@@ -14,14 +15,6 @@ class TeamController extends Controller
             'custom_server_limit',
             'pivot',
         ]);
-        if (request()->attributes->get('can_read_sensitive', false) === false) {
-            $team->makeHidden([
-                'smtp_username',
-                'smtp_password',
-                'resend_api_key',
-                'telegram_token',
-            ]);
-        }
 
         return serializeApiResponse($team);
     }
@@ -64,7 +57,7 @@ class TeamController extends Controller
         if (is_null($teamId)) {
             return invalidTokenResponse();
         }
-        $teams = auth()->user()->teams->sortBy('id');
+        $teams = auth()->user()->teams->where('id', $teamId)->values();
         $teams = $teams->map(function ($team) {
             return $this->removeSensitiveData($team);
         });
@@ -108,16 +101,18 @@ class TeamController extends Controller
     )]
     public function team_by_id(Request $request)
     {
-        $id = $request->id;
         $teamId = getTeamIdFromToken();
         if (is_null($teamId)) {
             return invalidTokenResponse();
         }
-        $teams = auth()->user()->teams;
-        $team = $teams->where('id', $id)->first();
+        if ((int) $request->id !== (int) $teamId) {
+            return response()->json(['message' => 'Team not found.'], 404);
+        }
+        $team = auth()->user()->teams->where('id', $teamId)->first();
         if (is_null($team)) {
             return response()->json(['message' => 'Team not found.'], 404);
         }
+        $this->authorize('view', $team);
         $team = $this->removeSensitiveData($team);
 
         return response()->json(
@@ -166,16 +161,18 @@ class TeamController extends Controller
     )]
     public function members_by_id(Request $request)
     {
-        $id = $request->id;
         $teamId = getTeamIdFromToken();
         if (is_null($teamId)) {
             return invalidTokenResponse();
         }
-        $teams = auth()->user()->teams;
-        $team = $teams->where('id', $id)->first();
+        if ((int) $request->id !== (int) $teamId) {
+            return response()->json(['message' => 'Team not found.'], 404);
+        }
+        $team = auth()->user()->teams->where('id', $teamId)->first();
         if (is_null($team)) {
             return response()->json(['message' => 'Team not found.'], 404);
         }
+        $this->authorize('view', $team);
         $members = $team->members;
         $members->makeHidden([
             'pivot',
@@ -190,9 +187,9 @@ class TeamController extends Controller
 
     #[OA\Get(
         summary: 'Authenticated Team',
-        description: 'Get currently authenticated team.',
-        path: '/teams/current',
-        operationId: 'get-current-team',
+        description: 'Get the team bound to the API token.',
+        path: '/team',
+        operationId: 'get-token-team',
         security: [
             ['bearerAuth' => []],
         ],
@@ -200,7 +197,7 @@ class TeamController extends Controller
         responses: [
             new OA\Response(
                 response: 200,
-                description: 'Current Team.',
+                description: 'Team bound to the API token.',
                 content: new OA\JsonContent(ref: '#/components/schemas/Team')),
             new OA\Response(
                 response: 401,
@@ -218,18 +215,87 @@ class TeamController extends Controller
         if (is_null($teamId)) {
             return invalidTokenResponse();
         }
-        $team = auth()->user()->currentTeam();
+        $team = auth()->user()->teams->where('id', $teamId)->first();
+        if (is_null($team)) {
+            return response()->json(['message' => 'Team not found.'], 404);
+        }
 
         return response()->json(
             $this->removeSensitiveData($team),
         );
     }
 
+    #[OA\Patch(
+        summary: 'Update authenticated team',
+        description: 'Update settings for the team bound to the API token.',
+        path: '/team',
+        operationId: 'update-token-team',
+        security: [['bearerAuth' => []]],
+        tags: ['Teams'],
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: new OA\MediaType(
+                mediaType: 'application/json',
+                schema: new OA\Schema(
+                    type: 'object',
+                    required: ['is_build_server_fallback_enabled'],
+                    properties: [
+                        'is_build_server_fallback_enabled' => [
+                            'type' => 'boolean',
+                            'description' => 'Whether deployments can fall back to the deployment server when no usable dedicated build server is available.',
+                        ],
+                    ],
+                ),
+            ),
+        ),
+        responses: [
+            new OA\Response(response: 200, description: 'Updated team.', content: new OA\JsonContent(ref: '#/components/schemas/Team')),
+            new OA\Response(response: 401, ref: '#/components/responses/401'),
+            new OA\Response(response: 400, ref: '#/components/responses/400'),
+            new OA\Response(response: 403, description: 'Forbidden.'),
+            new OA\Response(response: 422, ref: '#/components/responses/422'),
+        ]
+    )]
+    public function update_current_team(Request $request): JsonResponse
+    {
+        $teamId = getTeamIdFromToken();
+        if (is_null($teamId)) {
+            return invalidTokenResponse();
+        }
+        $team = auth()->user()->teams->where('id', $teamId)->first();
+        if (is_null($team)) {
+            return response()->json(['message' => 'Team not found.'], 404);
+        }
+
+        $this->authorize('update', $team);
+
+        $allowedFields = ['is_build_server_fallback_enabled'];
+        $validator = customApiValidator($request->all(), [
+            'is_build_server_fallback_enabled' => ['required', 'boolean'],
+        ]);
+        $extraFields = array_diff(array_keys($request->all()), $allowedFields);
+        if ($validator->fails() || ! empty($extraFields)) {
+            $errors = $validator->errors();
+            foreach ($extraFields as $field) {
+                $errors->add($field, 'This field is not allowed.');
+            }
+
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors' => $errors,
+            ], 422);
+        }
+
+        $team->update($validator->validated());
+
+        return response()->json($this->removeSensitiveData($team));
+    }
+
     #[OA\Get(
         summary: 'Authenticated Team Members',
-        description: 'Get currently authenticated team members.',
-        path: '/teams/current/members',
-        operationId: 'get-current-team-members',
+        description: 'Get members of the team bound to the API token.',
+        path: '/team/members',
+        operationId: 'get-token-team-members',
         security: [
             ['bearerAuth' => []],
         ],
@@ -237,7 +303,7 @@ class TeamController extends Controller
         responses: [
             new OA\Response(
                 response: 200,
-                description: 'Currently authenticated team members.',
+                description: 'Members of the team bound to the API token.',
                 content: [
                     new OA\MediaType(
                         mediaType: 'application/json',
@@ -263,7 +329,10 @@ class TeamController extends Controller
         if (is_null($teamId)) {
             return invalidTokenResponse();
         }
-        $team = auth()->user()->currentTeam();
+        $team = auth()->user()->teams->where('id', $teamId)->first();
+        if (is_null($team)) {
+            return response()->json(['message' => 'Team not found.'], 404);
+        }
         $team->members->makeHidden([
             'pivot',
             'email_change_code',

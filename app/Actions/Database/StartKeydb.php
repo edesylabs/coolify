@@ -2,16 +2,19 @@
 
 namespace App\Actions\Database;
 
+use App\Actions\Shared\EnsureContentFilesOnServer;
+use App\Exceptions\DatabaseStartException;
 use App\Helpers\SslHelper;
 use App\Models\SslCertificate;
 use App\Models\StandaloneKeydb;
-use Illuminate\Support\Facades\Storage;
+use App\Traits\ExecutesDatabaseStartCommands;
 use Lorisleiva\Actions\Concerns\AsAction;
+use Spatie\Activitylog\Models\Activity;
 use Symfony\Component\Yaml\Yaml;
 
 class StartKeydb
 {
-    use AsAction;
+    use AsAction, ExecutesDatabaseStartCommands;
 
     public StandaloneKeydb $database;
 
@@ -21,7 +24,11 @@ class StartKeydb
 
     private ?SslCertificate $ssl_certificate = null;
 
-    public function handle(StandaloneKeydb $database)
+    private string $resolvedRedisPassword;
+
+    private bool $redisPasswordFromSecretManager = false;
+
+    public function handle(StandaloneKeydb $database, ?Activity $activity = null)
     {
         $this->database = $database;
 
@@ -56,18 +63,8 @@ class StartKeydb
             $this->commands[] = "mkdir -p $this->configuration_dir/ssl";
 
             $server = $this->database->destination->server;
-            $caCert = $server->sslCertificates()->where('is_ca_certificate', true)->first();
-
-            if (! $caCert) {
-                $server->generateCaCertificate();
-                $caCert = $server->sslCertificates()->where('is_ca_certificate', true)->first();
-            }
-
-            if (! $caCert) {
-                $this->dispatch('error', 'No CA certificate found for this database. Please generate a CA certificate for this server in the server/advanced page.');
-
-                return;
-            }
+            $caCert = $server->ensureCaCertificate() ?? throw DatabaseStartException::missingCaCertificate();
+            array_push($this->commands, ...SslHelper::caCertificateFileCommands($caCert->ssl_certificate));
 
             $this->ssl_certificate = $this->database->sslCertificates()->first();
 
@@ -91,6 +88,7 @@ class StartKeydb
 
         $persistent_storages = $this->generate_local_persistent_volumes();
         $persistent_file_volumes = $this->database->fileStorages()->get();
+        array_push($this->commands, ...EnsureContentFilesOnServer::echoCommands($persistent_file_volumes, $this->database->destination->server));
         $volume_names = $this->generate_local_persistent_volumes_only_volume_names();
         $environment_variables = $this->generate_environment_variables();
         $this->add_custom_keydb();
@@ -109,13 +107,9 @@ class StartKeydb
                         $this->database->destination->network,
                     ],
                     'labels' => defaultDatabaseLabels($this->database)->toArray(),
-                    'healthcheck' => [
-                        'test' => "keydb-cli --pass {$this->database->keydb_password} ping",
-                        'interval' => '5s',
-                        'timeout' => '5s',
-                        'retries' => 10,
-                        'start_period' => '5s',
-                    ],
+                    'healthcheck' => $this->database->healthCheckConfiguration([
+                        'CMD', 'keydb-cli', '--pass', $this->resolvedRedisPassword, 'ping',
+                    ]),
                     'mem_limit' => $this->database->limits_memory,
                     'memswap_limit' => $this->database->limits_memory_swap,
                     'mem_swappiness' => $this->database->limits_memory_swappiness,
@@ -167,7 +161,7 @@ class StartKeydb
             $docker_compose['volumes'] = $volume_names;
         }
 
-        if (! is_null($this->database->keydb_conf) || ! empty($this->database->keydb_conf)) {
+        if (! is_null($this->database->keydb_conf) && ! empty($this->database->keydb_conf)) {
             $docker_compose['services'][$container_name]['volumes'] = array_merge(
                 $docker_compose['services'][$container_name]['volumes'] ?? [],
                 [
@@ -198,22 +192,28 @@ class StartKeydb
         // Add custom docker run options
         $docker_run_options = convertDockerRunToCompose($this->database->custom_docker_run_options);
         $docker_compose = generateCustomDockerRunOptionsForDatabases($docker_run_options, $docker_compose, $container_name, $this->database->destination->network);
+        if (! $this->database->isHealthcheckEnabled()) {
+            unset($docker_compose['services'][$container_name]['healthcheck']);
+        }
         $docker_compose = Yaml::dump($docker_compose, 10);
         $docker_compose_base64 = base64_encode($docker_compose);
         $this->commands[] = "echo '{$docker_compose_base64}' | base64 -d | tee $this->configuration_dir/docker-compose.yml > /dev/null";
         $readme = generate_readme_file($this->database->name, now());
-        $this->commands[] = "echo '{$readme}' > $this->configuration_dir/README.md";
-        $this->commands[] = "echo 'Pulling {$database->image} image.'";
+        $this->commands[] = "echo '{$readme}' | tee $this->configuration_dir/README.md > /dev/null";
+        $this->commands[] = 'echo '.escapeshellarg("Pulling {$database->image} image.");
         $this->commands[] = "docker compose -f $this->configuration_dir/docker-compose.yml pull";
         if ($this->database->enable_ssl) {
             $this->commands[] = "chown -R 999:999 $this->configuration_dir/ssl/server.key $this->configuration_dir/ssl/server.crt";
         }
-        $this->commands[] = "docker stop --time=10 $container_name 2>/dev/null || true";
+        if (! is_null($this->database->keydb_conf) && ! empty($this->database->keydb_conf)) {
+            $this->commands[] = "chown 999:999 $this->configuration_dir/keydb.conf";
+        }
+        $this->commands[] = dockerStopCommand(10, $container_name, $this->database->destination->server).' 2>/dev/null || true';
         $this->commands[] = "docker rm -f $container_name 2>/dev/null || true";
         $this->commands[] = "docker compose -f $this->configuration_dir/docker-compose.yml up -d";
         $this->commands[] = "echo 'Database started.'";
 
-        return remote_process($this->commands, $database->destination->server, callEventOnFinish: 'DatabaseStatusChanged');
+        return $this->executeDatabaseStartCommands($this->commands, $database, $activity);
     }
 
     private function generate_local_persistent_volumes()
@@ -251,11 +251,21 @@ class StartKeydb
     private function generate_environment_variables()
     {
         $environment_variables = collect();
+        $this->resolvedRedisPassword = (string) $this->database->keydb_password;
+        $passwordVariable = $this->database->serverPasswordEnvironmentVariable();
         foreach ($this->database->runtime_environment_variables as $env) {
-            $environment_variables->push("$env->key=$env->real_value");
+            $rawValue = (string) $this->database->resolveSecretManagerEnvironmentVariableValue($env);
+            $resolvedValue = (string) $this->database->formatEnvironmentVariableValue($env, $rawValue);
+            $environment_variables->push($env->key.'='.$resolvedValue);
+            // A REDIS_PASSWORD variable overrides the stored password, which stays unchanged.
+            if ($passwordVariable?->is($env) && $rawValue !== '') {
+                // Credentials below are placed directly in the compose file (healthcheck, command).
+                $this->resolvedRedisPassword = $this->database->formatComposeFileValue($env, $rawValue);
+                $this->redisPasswordFromSecretManager = $this->database->environmentVariableUsesSecretManager($env);
+            }
         }
 
-        if ($environment_variables->filter(fn ($env) => str($env)->contains('REDIS_PASSWORD'))->isEmpty()) {
+        if (! $this->hasEnvironmentVariable($environment_variables, 'REDIS_PASSWORD')) {
             $environment_variables->push("REDIS_PASSWORD={$this->database->keydb_password}");
         }
 
@@ -270,16 +280,16 @@ class StartKeydb
             return;
         }
         $filename = 'keydb.conf';
-        Storage::disk('local')->put("tmp/keydb.conf_{$this->database->uuid}", $this->database->keydb_conf);
-        $path = Storage::path("tmp/keydb.conf_{$this->database->uuid}");
-        instant_scp($path, "{$this->configuration_dir}/{$filename}", $this->database->destination->server);
-        Storage::disk('local')->delete("tmp/keydb.conf_{$this->database->uuid}");
+        $content = $this->database->keydb_conf;
+        $content_base64 = base64_encode($content);
+        $this->commands[] = "echo '{$content_base64}' | base64 -d | tee $this->configuration_dir/{$filename} > /dev/null";
     }
 
     private function buildStartCommand(): string
     {
         $hasKeydbConf = ! is_null($this->database->keydb_conf) && ! empty($this->database->keydb_conf);
         $keydbConfPath = '/etc/keydb/keydb.conf';
+        $passwordArgument = $this->requirePassArgument();
 
         if ($hasKeydbConf) {
             $confContent = $this->database->keydb_conf;
@@ -288,10 +298,10 @@ class StartKeydb
             if ($hasRequirePass) {
                 $command = "keydb-server $keydbConfPath";
             } else {
-                $command = "keydb-server $keydbConfPath --requirepass {$this->database->keydb_password}";
+                $command = "keydb-server $keydbConfPath --requirepass {$passwordArgument}";
             }
         } else {
-            $command = "keydb-server --requirepass {$this->database->keydb_password} --appendonly yes";
+            $command = "keydb-server --requirepass {$passwordArgument} --appendonly yes";
         }
 
         if ($this->database->enable_ssl) {
@@ -306,5 +316,20 @@ class StartKeydb
         }
 
         return $command;
+    }
+
+    /**
+     * The password argument of the start command. Docker Compose splits the command like a shell, so the
+     * password is quoted. Databases created before this release keep their unquoted v4.3.23 argument when
+     * quoting would change it (quotes, backslashes, whitespace, ; & | < >): Compose splits or cuts the old
+     * command there, so quoting now would change the password or options and can lose data.
+     */
+    private function requirePassArgument(): string
+    {
+        $keepsUnquotedPassword = $this->database->legacy_password_quoting
+            && ! $this->redisPasswordFromSecretManager
+            && strpbrk($this->resolvedRedisPassword, "\\'\";&|<> \t\r\n") !== false;
+
+        return $keepsUnquotedPassword ? $this->resolvedRedisPassword : escapeshellarg($this->resolvedRedisPassword);
     }
 }
