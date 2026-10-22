@@ -111,7 +111,9 @@ it('repairs an unfinished earlier run before updating, restoring only an incompl
         ->toContain('done | rolled-back | recovered) ;;')
         ->toContain("SELECT count(*) FROM pg_constraint WHERE conname = '\$last';")
         ->toContain("mark_snapshot done\nok \"Coolify \$VERSION deployed successfully\"")
-        ->and(strpos($script, 'if database_complete "$unfinished"; then'))->toBeLessThan(strpos($script, 'restore_snapshot || fail "Automatic repair failed.'));
+        ->toContain('Could not check whether the database is intact; nothing was changed.')
+        ->and(strpos($script, 'elif [ "$state" = "incomplete" ]; then'))->toBeLessThan(strpos($script, 'current_dump="$unfinished/before-repair-'))
+        ->and(strpos($script, 'current_dump="$unfinished/before-repair-'))->toBeLessThan(strpos($script, 'restore_snapshot || fail "Automatic repair failed.'));
 });
 
 it('reports a pending repair in a dry run', function () {

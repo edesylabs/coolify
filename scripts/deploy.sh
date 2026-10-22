@@ -194,20 +194,30 @@ unfinished_snapshot() {
     [ -n "$latest" ] || return 0
     case "$(cat "$latest/status" 2>/dev/null || echo unknown)" in
         done | rolled-back | recovered) ;;
+        # No status file: written by an older deploy.sh, which never recorded success. Only trust recent ones.
+        unknown) [ -n "$(find "$latest" -maxdepth 0 -mtime -7 2>/dev/null)" ] && echo "$latest" ;;
         *) echo "$latest" ;;
     esac
+    return 0
 }
 
 # A plain pg_dump creates the constraints after loading all data, so a restore that was cut
 # short is missing them. The last constraint in the dump existing means the restore completed.
-database_complete() {
-    local dump="$1/coolify-db.sql.gz" last=""
+# Prints complete, incomplete or unknown (could not check: never treated as incomplete).
+database_state() {
+    local dump="$1/coolify-db.sql.gz" last="" result
     [ -f "$dump" ] && last=$(gunzip -c "$dump" | sed -nE 's/^    ADD CONSTRAINT "?([^" ]+)"? .*/\1/p' | tail -1)
     if [ -n "$last" ]; then
-        [ "$(db_query "SELECT count(*) FROM pg_constraint WHERE conname = '$last';" 2>/dev/null)" = "1" ]
+        result=$(docker exec coolify-db psql -U "$(db_user)" -d postgres -tAc \
+            "SELECT count(*) FROM pg_database WHERE datname = '$(db_name)';" 2>/dev/null) || { echo unknown; return; }
+        # The database itself is gone (dropped by an interrupted restore)
+        [ "$result" = "0" ] && { echo incomplete; return; }
+        result=$(db_query "SELECT count(*) FROM pg_constraint WHERE conname = '$last';" 2>/dev/null) || { echo unknown; return; }
+        case "$result" in 1) echo complete ;; 0) echo incomplete ;; *) echo unknown ;; esac
     else
         # Nothing to compare against: at least require the foreign keys a finished restore has
-        [ "$(db_query "SELECT count(*) > 0 FROM pg_constraint WHERE contype = 'f' AND connamespace = 'public'::regnamespace;" 2>/dev/null)" = "t" ]
+        result=$(db_query "SELECT count(*) > 0 FROM pg_constraint WHERE contype = 'f' AND connamespace = 'public'::regnamespace;" 2>/dev/null) || { echo unknown; return; }
+        case "$result" in t) echo complete ;; f) echo incomplete ;; *) echo unknown ;; esac
     fi
 }
 
@@ -368,15 +378,27 @@ recover_unfinished_deploy() {
         tag=$(current_image)
         compose_up "$([ "$tag" = none ] && echo latest || echo "${tag##*:}")" postgres redis >/dev/null 2>&1 || true
     fi
-    wait_for_database || true
+    wait_for_database || fail "coolify-db is not accepting connections; cannot check the database. Check: docker logs coolify-db"
 
-    if database_complete "$unfinished"; then
+    local state
+    state=$(database_state "$unfinished")
+    if [ "$state" = "complete" ]; then
         ok "Database is intact; no restore needed"
-    else
+    elif [ "$state" = "incomplete" ]; then
         [ -f "$unfinished/coolify-db.sql.gz" ] || fail "The database is incomplete and $unfinished has no database dump to restore."
         warn "The database is incomplete; restoring the snapshot taken before that deploy"
+        # Keep what is there now too, in case the check was wrong
+        local current_dump
+        current_dump="$unfinished/before-repair-$(date +%Y%m%d-%H%M%S).sql.gz"
+        if [ "$(docker exec coolify-db psql -U "$(db_user)" -d postgres -tAc "SELECT count(*) FROM pg_database WHERE datname = '$(db_name)';" 2>/dev/null)" = "1" ]; then
+            docker exec coolify-db pg_dump -U "$(db_user)" "$(db_name)" | gzip >"$current_dump" && gzip -t "$current_dump" ||
+                fail "Could not save the current database before repairing; nothing was changed."
+            ok "Current database saved to $current_dump"
+        fi
         restore_snapshot || fail "Automatic repair failed. Snapshot kept at $unfinished"
         ok "Restored $PREVIOUS_IMAGE with its database"
+    else
+        fail "Could not check whether the database is intact; nothing was changed. Check: docker logs coolify-db"
     fi
     mark_snapshot recovered
 
