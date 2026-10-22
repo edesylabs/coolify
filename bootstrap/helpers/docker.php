@@ -2097,3 +2097,26 @@ function injectDockerComposeBuildArgs(string $command, string $buildArgsString):
 
     return $modifiedCommand ?? $command;
 }
+
+/**
+ * One remote shell line that makes sure the helper image exists on the server. It pulls with the
+ * stored registry credentials first. When that fails, it pulls again with an empty DOCKER_CONFIG,
+ * because a stale or revoked ghcr.io token makes the registry deny even a public image.
+ * The last stdout line is one of the HELPER_IMAGE_* markers below.
+ */
+function ensureHelperImageCommand(string $image): string
+{
+    $script = implode('; ', [
+        'image='.escapeshellarg($image),
+        'if docker image inspect "$image" >/dev/null 2>&1; then echo '.HELPER_IMAGE_PRESENT.'; exit 0; fi',
+        'if error=$(docker pull "$image" 2>&1 >/dev/null); then echo '.HELPER_IMAGE_PULLED.'; exit 0; fi',
+        'anonymous_config=$(mktemp -d) || { printf "%s\n" "$error"; exit 1; }',
+        'anonymous_error=$(DOCKER_CONFIG="$anonymous_config" docker pull "$image" 2>&1 >/dev/null); anonymous_exit=$?',
+        'rm -rf "$anonymous_config"',
+        'if [ "$anonymous_exit" -eq 0 ]; then printf "%s\n" "$error"; echo '.HELPER_IMAGE_PULLED_ANONYMOUSLY.'; exit 0; fi',
+        'printf "Pull with stored credentials: %s\nPull without credentials: %s\n" "$error" "$anonymous_error"',
+        'exit 1',
+    ]);
+
+    return 'sh -c '.escapeshellarg($script);
+}

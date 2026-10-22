@@ -2787,6 +2787,7 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
             $this->application_deployment_queue->addLogEntry('Preparing container with helper image with updated envs.');
         }
 
+        $this->ensure_helper_image($helperImage);
         $this->graceful_shutdown_container($this->deployment_uuid, skipRemove: true);
         $this->execute_remote_command(
             [
@@ -2799,6 +2800,33 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
             ],
         );
         $this->run_pre_deployment_command();
+    }
+
+    /**
+     * Pull the helper image before `docker run` needs it. A stale registry login on the server makes
+     * the normal pull fail with "denied"; the image is public, so a pull without credentials still works.
+     */
+    private function ensure_helper_image(string $helperImage): void
+    {
+        $this->execute_remote_command([
+            'command' => ensureHelperImageCommand($helperImage),
+            'hidden' => true,
+            'ignore_errors' => true,
+            'append' => false,
+            'save' => 'helper_image_pull',
+        ]);
+        $output = $this->trimmedSavedOutput('helper_image_pull');
+
+        if ($output->endsWith([HELPER_IMAGE_PRESENT, HELPER_IMAGE_PULLED])) {
+            return;
+        }
+        if ($output->endsWith(HELPER_IMAGE_PULLED_ANONYMOUSLY)) {
+            $this->application_deployment_queue->addLogEntry("Pulling {$helperImage} with the server's Docker registry credentials failed, so it was pulled without credentials. Run \"docker logout\" for that registry on the server, or log in again with a valid token.", 'stderr');
+
+            return;
+        }
+
+        throw new DeploymentException("Could not pull the helper image {$helperImage}. If the server has a stale \"docker login\" for this registry, run \"docker logout\" for it or log in again.\n{$output}");
     }
 
     private function restart_builder_container_with_actual_commit()

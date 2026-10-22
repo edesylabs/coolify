@@ -329,6 +329,9 @@ it('hides the helper container command when build secrets are passed as environm
         if (str_contains($process->command, 'docker run -d')) {
             return Process::result(errorOutput: 'docker: Error response from daemon: network not found.', exitCode: 125);
         }
+        if (str_contains($process->command, 'docker image inspect')) {
+            return Process::result(output: HELPER_IMAGE_PRESENT);
+        }
 
         return Process::result(output: str_contains($process->command, 'echo $HOME') ? '/root' : 'NOK');
     });
