@@ -15,7 +15,8 @@ set -e # Exit immediately if a command exits with a non-zero status
 ## $1 could be empty, so we need to disable this check
 #set -u # Treat unset variables as an error and exit
 set -o pipefail # Cause a pipeline to return the status of the last command that exited with a non-zero status
-CDN="https://cdn.coollabs.io/coolify"
+CDN="${COOLIFY_CDN:-https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main}"
+IMAGE_NAMESPACE="${COOLIFY_IMAGE_NAMESPACE:-edesylabs}"
 DATE=$(date +"%Y%m%d-%H%M%S")
 
 OS_TYPE=$(grep -w "ID" /etc/os-release | cut -d "=" -f 2 | tr -d '"')
@@ -267,7 +268,7 @@ else
         REGISTRY_URL=$(grep "^REGISTRY_URL=" "$ENV_FILE" | cut -d '=' -f2)
         echo "Using registry URL from .env: $REGISTRY_URL"
     else
-        REGISTRY_URL="docker.io"
+        REGISTRY_URL="ghcr.io"
         echo "Using default registry URL: $REGISTRY_URL"
     fi
 fi
@@ -967,9 +968,9 @@ curl -fsSL -L $CDN/docker-compose.prod.yml -o /data/coolify/source/docker-compos
 PID2=$!
 curl -fsSL -L $CDN/.env.production -o /data/coolify/source/.env.production &
 PID3=$!
-curl -fsSL -L $CDN/upgrade.sh -o /data/coolify/source/upgrade.sh &
+curl -fsSL -L $CDN/scripts/upgrade.sh -o /data/coolify/source/upgrade.sh &
 PID4=$!
-curl -fsSL -L $CDN/upgrade-postgres.sh -o /data/coolify/source/upgrade-postgres.sh &
+curl -fsSL -L $CDN/scripts/upgrade-postgres.sh -o /data/coolify/source/upgrade-postgres.sh &
 PID5=$!
 
 # Wait for all downloads to complete and check for errors
@@ -1100,9 +1101,9 @@ step_done "$SSH_KEY_DETAIL"
 step_start "Pulling images" "coolify · postgres · redis · helper"
 # fd 3 is closed so the detached container restart in upgrade.sh does not hold the terminal open
 if [[ $- == *x* ]]; then
-    bash -x /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${LATEST_HELPER_VERSION:-latest}" "${REGISTRY_URL:-docker.io}" "true" 3>&-
+    bash -x /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "${IMAGE_NAMESPACE}" "true" 3>&-
 else
-    bash /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${LATEST_HELPER_VERSION:-latest}" "${REGISTRY_URL:-docker.io}" "true" 3>&-
+    bash /data/coolify/source/upgrade.sh "${LATEST_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "${IMAGE_NAMESPACE}" "true" 3>&-
 fi
 step_done
 

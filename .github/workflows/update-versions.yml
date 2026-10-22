@@ -27,7 +27,7 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION=$(grep "'version' => '" config/constants.php | sed -E "s/.*'version' => '([^']+)'.*/\1/")
+            VERSION=$(grep -E "^[[:space:]]*'version' =>" config/constants.php | head -1 | sed -E "s/.*'([0-9][^']*)'.*/\1/")
           fi
           echo "current=$VERSION" >> $GITHUB_OUTPUT
 

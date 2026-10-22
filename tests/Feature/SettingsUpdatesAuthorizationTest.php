@@ -45,6 +45,7 @@ test('instance admin cannot save an invalid docker registry url', function () {
 
     $rootTeam = Team::find(0) ?? Team::factory()->create(['id' => 0]);
     $settings = InstanceSettings::forceCreate(['id' => 0]);
+    $originalRegistryUrl = $settings->fresh()->docker_registry_url;
     Once::flush();
 
     $user = User::factory()->create();
@@ -58,5 +59,5 @@ test('instance admin cannot save an invalid docker registry url', function () {
         ->call('instantSave')
         ->assertHasErrors(['docker_registry_url' => 'in']);
 
-    expect($settings->fresh()->docker_registry_url)->toBe('docker.io');
+    expect($settings->fresh()->docker_registry_url)->toBe($originalRegistryUrl);
 });

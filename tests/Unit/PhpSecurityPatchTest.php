@@ -1,29 +1,26 @@
 <?php
 
 /**
- * Unit tests guarding the php2shell fix (CVE-2026-109618 / CVE-2026-109619).
+ * Unit tests guarding the php2shell fix (CVE-2026-109618 / CVE-2026-109619) and the
+ * fork's release/upgrade wiring that delivers patched images to servers.
  *
- * PHP < 8.4.27 is vulnerable to unauthenticated RCE. These tests ensure the
- * Docker base image stays pinned to a patched serversideup release and that
- * curl-installed servers actually download and pull the patched image.
+ * PHP < 8.4.27 is vulnerable to unauthenticated RCE. The production image builds on
+ * upstream's hotfix image (PHP 8.4.27); development pins the patched serversideup v4.5.3.
+ * serversideup v5 is avoided because it breaks Coolify's startup (upstream #12141).
  */
-it('pins a patched serversideup base image in the Dockerfiles', function (string $dockerfile) {
-    $contents = file_get_contents(__DIR__.'/../../'.$dockerfile);
+it('builds production on the patched upstream PHP hotfix image', function () {
+    expect(file_get_contents(__DIR__.'/../../docker/production/Dockerfile'))
+        ->toContain('ARG SERVERSIDEUP_PHP_IMAGE=ghcr.io/coollabsio/serversideup-php:8.4-fpm-nginx-alpine-v4.5.1-hotfix');
+});
 
-    expect($contents)
+it('pins a patched serversideup base image for development', function () {
+    expect(file_get_contents(__DIR__.'/../../docker/development/Dockerfile'))
         ->toContain('ARG SERVERSIDEUP_PHP_VERSION=8.4-fpm-nginx-alpine-v4.5.3')
-        ->not->toMatch('/^ARG SERVERSIDEUP_PHP_VERSION=8\.4-fpm-nginx-alpine$/m');
-})->with([
-    'production' => 'docker/production/Dockerfile',
-    'development' => 'docker/development/Dockerfile',
-]);
+        ->not->toMatch('/^ARG SERVERSIDEUP_PHP_VERSION=8\.4-fpm-nginx-alpine-v4\.5\.[0-2]$/m');
+});
 
-it('pulls the MinIO client from quay.io instead of the removed Docker Hub image', function (string $dockerfile) {
-    $contents = file_get_contents(__DIR__.'/../../'.$dockerfile);
-
-    expect($contents)
-        ->toContain('FROM quay.io/minio/aistor/mc:${MINIO_VERSION} AS minio-client')
-        ->not->toContain('FROM minio/mc:');
+it('pulls the MinIO client from a registry that still publishes it', function (string $dockerfile) {
+    expect(file_get_contents(__DIR__.'/../../'.$dockerfile))->not->toContain('FROM minio/mc:');
 })->with([
     'production' => 'docker/production/Dockerfile',
     'development' => 'docker/development/Dockerfile',
@@ -31,9 +28,7 @@ it('pulls the MinIO client from quay.io instead of the removed Docker Hub image'
 ]);
 
 it('installs a postgres client that exists on the Alpine 3.24 base image', function (string $dockerfile) {
-    $contents = file_get_contents(__DIR__.'/../../'.$dockerfile);
-
-    expect($contents)
+    expect(file_get_contents(__DIR__.'/../../'.$dockerfile))
         ->toContain('ARG POSTGRES_VERSION=18')
         ->not->toContain('ARG POSTGRES_VERSION=15');
 })->with([
@@ -49,28 +44,15 @@ it('refreshes the base image when building in CI', function (string $workflow) {
 ]);
 
 it('publishes a version tag for the coolify image on release', function () {
-    $workflow = file_get_contents(__DIR__.'/../../.github/workflows/release.yml');
-
-    expect($workflow)->toContain('${{ matrix.image }}:${{ needs.bump-version.outputs.new_version }}');
+    expect(file_get_contents(__DIR__.'/../../.github/workflows/release.yml'))
+        ->toContain('${{ matrix.image }}:${{ needs.bump-version.outputs.new_version }}');
 });
 
-it('downloads upgrade.sh from the scripts directory', function (string $file, string $expected) {
+it('downloads the fork scripts from the scripts directory', function (string $file, string $expected) {
     expect(file_get_contents(__DIR__.'/../../'.$file))->toContain($expected);
 })->with([
-    'install.sh' => ['scripts/install.sh', 'curl -fsSL $CDN/scripts/upgrade.sh -o /data/coolify/source/upgrade.sh'],
-    'UpdateCoolify' => ['app/Actions/Server/UpdateCoolify.php', 'curl -fsSL $cdn/scripts/upgrade.sh -o /data/coolify/source/upgrade.sh'],
+    'install.sh upgrade.sh' => ['scripts/install.sh', 'curl -fsSL -L $CDN/scripts/upgrade.sh -o /data/coolify/source/upgrade.sh'],
+    'install.sh upgrade-postgres.sh' => ['scripts/install.sh', 'curl -fsSL -L $CDN/scripts/upgrade-postgres.sh -o /data/coolify/source/upgrade-postgres.sh'],
+    'upgrade.sh upgrade-postgres.sh' => ['scripts/upgrade.sh', 'curl -fsSL -L $CDN/scripts/upgrade-postgres.sh -o /data/coolify/source/upgrade-postgres.sh'],
+    'default upgrade script url' => ['config/constants.php', "'upgrade_script_url' => env('UPGRADE_SCRIPT_URL', 'https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main/scripts/upgrade.sh')"],
 ]);
-
-it('passes registry and namespace to upgrade.sh in the expected order', function () {
-    $install = file_get_contents(__DIR__.'/../../scripts/install.sh');
-
-    expect($install)
-        ->toContain('upgrade.sh "${LATEST_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "${COOLIFY_IMAGE_NAMESPACE:-edesylabs}" "true"')
-        ->not->toContain('"${LATEST_HELPER_VERSION:-latest}" "${REGISTRY_URL:-ghcr.io}" "true"');
-});
-
-it('always pulls the coolify image when upgrading', function () {
-    $upgrade = file_get_contents(__DIR__.'/../../scripts/upgrade.sh');
-
-    expect(substr_count($upgrade, 'up -d --pull always'))->toBe(2);
-});

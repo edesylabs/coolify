@@ -7,10 +7,14 @@ on:
       - "CHANGELOG.md"
       - "versions.json"
       - ".github/workflows/coolify-helper.yml"
-      - ".github/workflows/coolify-realtime.yml"
       - "docker/coolify-helper/Dockerfile"
-      - "docker/coolify-realtime/Dockerfile"
       - "templates/**"
+      - "scripts/**"
+      - "**.md"
+      - "docs/**"
+      - ".agents/**"
+      - ".claude/**"
+      - ".cursor/**"
   workflow_dispatch:
     inputs:
       version_bump:
@@ -48,7 +52,7 @@ jobs:
       - name: Get current version
         id: current
         run: |
-          VERSION=$(grep "'version' => '" config/constants.php | sed -E "s/.*'version' => '([^']+)'.*/\1/")
+          VERSION=$(grep -E "^[[:space:]]*'version' =>" config/constants.php | head -1 | sed -E "s/.*'([0-9][^']*)'.*/\1/")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Determine version bump type
@@ -77,8 +81,12 @@ jobs:
           echo "Current version: $CURRENT"
           echo "Bump type: $BUMP_TYPE"
 
-          # Parse version (handles formats like 4.0.0-beta.444)
-          if [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-beta\.([0-9]+)$ ]]; then
+          # Fork scheme X.Y.Z.N: X.Y.Z is the upstream base version, N the fork release.
+          # Every bump increments N; syncing a new upstream release resets it to X.Y.Z.0 by hand.
+          if [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            NEW_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}.$((BASH_REMATCH[4] + 1))"
+          # Legacy fork scheme (e.g. 4.0.0-beta.444)
+          elif [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-beta\.([0-9]+)$ ]]; then
             MAJOR="${BASH_REMATCH[1]}"
             MINOR="${BASH_REMATCH[2]}"
             PATCH="${BASH_REMATCH[3]}"
@@ -135,20 +143,22 @@ jobs:
 
       - name: Update config/constants.php
         run: |
-          sed -i "s/'version' => '.*'/'version' => '${{ steps.bump.outputs.new_version }}'/" config/constants.php
+          # Only the first 'version' key (the coolify app version); later keys (e.g. sysbox) must not change
+          sed -i -E "0,/^[[:space:]]*'version' =>/ s/^([[:space:]]*'version' => .*)'[0-9][^']*',/\1'${{ steps.bump.outputs.new_version }}',/" config/constants.php
 
       - name: Update versions.json
         run: |
           jq --arg ver "${{ steps.bump.outputs.new_version }}" \
             '.coolify.v4.version = $ver' versions.json > versions.tmp
           mv versions.tmp versions.json
+          cp versions.json other/nightly/versions.json
 
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add config/constants.php versions.json
+          git add config/constants.php versions.json other/nightly/versions.json
           git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
           git push
 
@@ -162,10 +172,6 @@ jobs:
         include:
           - image: coolify
             dockerfile: ./docker/production/Dockerfile
-          - image: coolify-helper
-            dockerfile: ./docker/coolify-helper/Dockerfile
-          - image: coolify-realtime
-            dockerfile: ./docker/coolify-realtime/Dockerfile
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -229,8 +235,6 @@ jobs:
           \`\`\`bash
           # Pull the new version
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify:${{ needs.bump-version.outputs.new_version }}
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-helper:${{ needs.bump-version.outputs.new_version }}
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/coolify-realtime:${{ needs.bump-version.outputs.new_version }}
           \`\`\`
 
           ## Upgrade

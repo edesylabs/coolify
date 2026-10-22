@@ -38,10 +38,18 @@ it('downloads postgres upgrade script during install and upgrade without auto-ru
         ->toContain('chmod +x')
         ->not->toContain('bash /data/coolify/source/upgrade-postgres.sh');
 })->with([
-    'stable install' => 'scripts/install.sh',
     'nightly install' => 'other/nightly/install.sh',
-    'stable upgrade' => 'scripts/upgrade.sh',
     'nightly upgrade' => 'other/nightly/upgrade.sh',
+]);
+
+it('downloads postgres upgrade script from the fork scripts directory without auto-running it', function (string $path) {
+    expect(file_get_contents(getcwd().'/'.$path))
+        ->toContain('curl -fsSL -L $CDN/scripts/upgrade-postgres.sh -o /data/coolify/source/upgrade-postgres.sh')
+        ->toContain('chmod +x')
+        ->not->toContain('bash /data/coolify/source/upgrade-postgres.sh');
+})->with([
+    'stable install' => 'scripts/install.sh',
+    'stable upgrade' => 'scripts/upgrade.sh',
 ]);
 
 it('uses the selected registry url when extracting upgrade images', function (string $path) {
@@ -49,9 +57,13 @@ it('uses the selected registry url when extracting upgrade images', function (st
 
     expect($script)->toContain('IMAGES=$(REGISTRY_URL=${REGISTRY_URL} LATEST_IMAGE=${LATEST_IMAGE} docker compose --env-file "$ENV_FILE" $COMPOSE_FILES config --images');
 })->with([
-    'stable upgrade' => 'scripts/upgrade.sh',
     'nightly upgrade' => 'other/nightly/upgrade.sh',
 ]);
+
+it('uses the selected registry and namespace when extracting fork upgrade images', function () {
+    expect(file_get_contents(getcwd().'/scripts/upgrade.sh'))
+        ->toContain('IMAGES=$(REGISTRY_URL=${REGISTRY_URL} COOLIFY_IMAGE_NAMESPACE=${IMAGE_NAMESPACE} LATEST_IMAGE=${LATEST_IMAGE} docker compose --env-file "$ENV_FILE" $COMPOSE_FILES config --images');
+});
 
 it('persists the selected registry url during upgrades', function (string $path) {
     $script = file_get_contents(getcwd().'/'.$path);
@@ -101,9 +113,17 @@ it('uses the existing env registry url when old callers do not pass a registry a
         ->toContain("REGISTRY_URL=$(grep \"^REGISTRY_URL=\" \"\$ENV_FILE\" | cut -d '=' -f2- | head -n1)")
         ->toContain('REGISTRY_URL="docker.io"');
 })->with([
-    'stable upgrade' => 'scripts/upgrade.sh',
     'nightly upgrade' => 'other/nightly/upgrade.sh',
 ]);
+
+it('uses the existing env registry url when fork callers do not pass a registry argument', function () {
+    expect(file_get_contents(getcwd().'/scripts/upgrade.sh'))
+        ->toContain('if [ -n "${2:-}" ]; then')
+        ->toContain('REGISTRY_URL="$2"')
+        ->toContain('elif [ -f "$ENV_FILE" ] && grep -q "^REGISTRY_URL=" "$ENV_FILE"; then')
+        ->toContain("REGISTRY_URL=$(grep \"^REGISTRY_URL=\" \"\$ENV_FILE\" | cut -d '=' -f2- | head -n1)")
+        ->toContain('REGISTRY_URL="ghcr.io"');
+});
 
 it('keeps postgres upgrade compose override in future upgrade compose commands', function (string $path) {
     $script = file_get_contents(getcwd().'/'.$path);

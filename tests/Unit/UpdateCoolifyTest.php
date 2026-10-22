@@ -133,11 +133,11 @@ it('passes the saved registry URL to the upgrade script command', function () {
 
     expect(RemoteProcessCommand::read(Activity::query()->latest('id')->first()))->toBe(
         "curl -fsSL https://cdn.example.com/upgrade.sh -o /data/coolify/source/upgrade.sh\n".
-        "bash /data/coolify/source/upgrade.sh '4.0.10' '1.0.14' 'ghcr.io'"
+        "bash /data/coolify/source/upgrade.sh '4.0.10' 'ghcr.io' 'edesylabs'"
     );
 });
 
-it('falls back to docker io for the upgrade script command when no registry is saved', function () {
+it('uses the fork ghcr.io registry for the upgrade script command when no registry is saved', function () {
     Queue::fake();
     config([
         'app.env' => 'testing',
@@ -162,11 +162,11 @@ it('falls back to docker io for the upgrade script command when no registry is s
 
     expect(RemoteProcessCommand::read(Activity::query()->latest('id')->first()))->toBe(
         "curl -fsSL https://cdn.example.com/upgrade.sh -o /data/coolify/source/upgrade.sh\n".
-        "bash /data/coolify/source/upgrade.sh '4.0.10' '1.0.14' 'docker.io'"
+        "bash /data/coolify/source/upgrade.sh '4.0.10' 'ghcr.io' 'edesylabs'"
     );
 });
 
-it('defaults the registry setting to docker io when no registry is saved', function () {
+it('defaults the registry setting to the fork ghcr.io registry when no registry is saved', function () {
     config([
         'app.env' => 'testing',
         'constants.coolify.registry_url' => 'ghcr.io',
@@ -183,7 +183,7 @@ it('defaults the registry setting to docker io when no registry is saved', funct
     session(['currentTeam' => ['id' => $rootTeam->id]]);
 
     Livewire::test(Updates::class)
-        ->assertSet('docker_registry_url', 'docker.io');
+        ->assertSet('docker_registry_url', 'ghcr.io');
 });
 
 it('uses the database registry for helper images when the configured helper image is default', function () {

@@ -119,16 +119,16 @@ class UpdateCoolify
     {
         $this->ensureNoUpgradeIsRunning();
 
-        $latestHelperImageVersion = getHelperVersion();
         $upgradeScriptUrl = config('constants.coolify.upgrade_script_url');
         $registryUrl = coolifyRegistryUrl();
 
+        // Fork upgrade.sh contract: <version> <registry> <namespace>; it resolves the helper version itself.
         remote_process([
             "curl -fsSL {$upgradeScriptUrl} -o /data/coolify/source/upgrade.sh",
             'bash /data/coolify/source/upgrade.sh '.
                 escapeshellarg($this->latestVersion).' '.
-                escapeshellarg($latestHelperImageVersion).' '.
-                escapeshellarg($registryUrl),
+                escapeshellarg($registryUrl).' '.
+                escapeshellarg(config('constants.coolify.image_namespace')),
         ], $this->server);
     }
 

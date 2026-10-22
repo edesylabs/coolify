@@ -1,18 +1,23 @@
 #!/bin/bash
 ## Do not modify this file. You will lose the ability to autoupdate!
 
-CDN="https://cdn.coollabs.io/coolify"
+# edesylabs fork. Argument contract (kept stable for servers upgrading from 4.1.0-beta.x):
+#   upgrade.sh <image-version> [registry] [namespace] [skip_backup]
+CDN="${COOLIFY_CDN:-https://raw.githubusercontent.com/edesylabs/coolify/refs/heads/main}"
 LATEST_IMAGE=${1:-latest}
-LATEST_HELPER_VERSION=${2:-latest}
 ENV_FILE="/data/coolify/source/.env"
-if [ -n "${3+x}" ]; then
-    REGISTRY_URL="$3"
+if [ -n "${2:-}" ]; then
+    REGISTRY_URL="$2"
 elif [ -f "$ENV_FILE" ] && grep -q "^REGISTRY_URL=" "$ENV_FILE"; then
     REGISTRY_URL=$(grep "^REGISTRY_URL=" "$ENV_FILE" | cut -d '=' -f2- | head -n1)
 else
-    REGISTRY_URL="docker.io"
+    REGISTRY_URL="ghcr.io"
 fi
+IMAGE_NAMESPACE=${3:-edesylabs}
 SKIP_BACKUP=${4:-false}
+# The helper image comes from upstream (coollabsio); its version is pinned in versions.json
+LATEST_HELPER_VERSION=$(curl -fsSL "$CDN/versions.json" 2>/dev/null | tr -d ' \n' | sed -nE 's/.*"helper":\{"version":"([^"]+)".*/\1/p')
+LATEST_HELPER_VERSION=${LATEST_HELPER_VERSION:-latest}
 STATUS_FILE="/data/coolify/source/.upgrade-status"
 
 DATE=$(date +%Y-%m-%d-%H-%M-%S)
@@ -51,6 +56,7 @@ echo "Started: $(date '+%Y-%m-%d %H:%M:%S')" >>"$LOGFILE"
 echo "Target Version: ${LATEST_IMAGE}" >>"$LOGFILE"
 echo "Helper Version: ${LATEST_HELPER_VERSION}" >>"$LOGFILE"
 echo "Registry URL: ${REGISTRY_URL}" >>"$LOGFILE"
+echo "Image Namespace: ${IMAGE_NAMESPACE}" >>"$LOGFILE"
 echo "============================================================" >>"$LOGFILE"
 
 log_section "Step 1/6: Downloading configuration files"
@@ -62,8 +68,8 @@ log "Downloading docker-compose.prod.yml from ${CDN}/docker-compose.prod.yml"
 curl -fsSL -L $CDN/docker-compose.prod.yml -o /data/coolify/source/docker-compose.prod.yml
 log "Downloading .env.production from ${CDN}/.env.production"
 curl -fsSL -L $CDN/.env.production -o /data/coolify/source/.env.production
-log "Downloading upgrade-postgres.sh from ${CDN}/upgrade-postgres.sh"
-curl -fsSL -L $CDN/upgrade-postgres.sh -o /data/coolify/source/upgrade-postgres.sh
+log "Downloading upgrade-postgres.sh from ${CDN}/scripts/upgrade-postgres.sh"
+curl -fsSL -L $CDN/scripts/upgrade-postgres.sh -o /data/coolify/source/upgrade-postgres.sh
 chmod +x /data/coolify/source/upgrade-postgres.sh
 log "Configuration files downloaded successfully"
 echo "     Done."
@@ -86,7 +92,7 @@ fi
 
 # Get all unique images from docker compose config
 # LATEST_IMAGE env var is needed for image substitution in compose files
-IMAGES=$(REGISTRY_URL=${REGISTRY_URL} LATEST_IMAGE=${LATEST_IMAGE} docker compose --env-file "$ENV_FILE" $COMPOSE_FILES config --images 2>/dev/null | sort -u)
+IMAGES=$(REGISTRY_URL=${REGISTRY_URL} COOLIFY_IMAGE_NAMESPACE=${IMAGE_NAMESPACE} LATEST_IMAGE=${LATEST_IMAGE} docker compose --env-file "$ENV_FILE" $COMPOSE_FILES config --images 2>/dev/null | sort -u)
 
 if [ -z "$IMAGES" ]; then
     log "ERROR: Failed to extract images from docker-compose files"
@@ -148,6 +154,12 @@ set_env_var() {
 
 log "Checking environment variables..."
 set_env_var "REGISTRY_URL" "$REGISTRY_URL"
+set_env_var "COOLIFY_IMAGE_NAMESPACE" "$IMAGE_NAMESPACE"
+set_env_var "COOLIFY_CDN" "$CDN"
+set_env_var "VERSIONS_URL" "$CDN/versions.json"
+set_env_var "UPGRADE_SCRIPT_URL" "$CDN/scripts/upgrade.sh"
+# Fork releases before 4.4.7.x pointed HELPER_IMAGE at a custom helper; use upstream's helper now
+set_env_var "HELPER_IMAGE" "${REGISTRY_URL}/coollabsio/coolify-helper"
 update_env_var "PUSHER_APP_ID" "$(openssl rand -hex 32)"
 update_env_var "PUSHER_APP_KEY" "$(openssl rand -hex 32)"
 update_env_var "PUSHER_APP_SECRET" "$(openssl rand -hex 32)"

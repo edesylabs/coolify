@@ -68,16 +68,6 @@ resolve_version() {
     curl -fsSL "$CDN/versions.json" | grep -m1 '"version"' | sed -E 's/.*"version"[^"]*"([^"]+)".*/\1/'
 }
 
-set_env_var() {
-    local key="$1"
-    local value="$2"
-    if grep -q "^${key}=" "$ENV_FILE"; then
-        sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
-    else
-        printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
-    fi
-}
-
 backup_database() {
     local backup_dir="$DATA_DIR/backups/deploy"
     local backup_file="$backup_dir/coolify-db-$(date +%Y%m%d-%H%M%S).sql.gz"
@@ -103,16 +93,10 @@ run_update() {
         backup_database
     fi
 
-    info "Pointing configuration at $REGISTRY_URL/$IMAGE_NAMESPACE"
-    set_env_var "REGISTRY_URL" "$REGISTRY_URL"
-    set_env_var "COOLIFY_IMAGE_NAMESPACE" "$IMAGE_NAMESPACE"
-    set_env_var "COOLIFY_CDN" "$CDN"
-    set_env_var "HELPER_IMAGE" "$REGISTRY_URL/$IMAGE_NAMESPACE/coolify-helper"
-    set_env_var "REALTIME_IMAGE" "$REGISTRY_URL/$IMAGE_NAMESPACE/coolify-realtime"
-
-    info "Updating to $VERSION"
+    info "Updating to $VERSION ($REGISTRY_URL/$IMAGE_NAMESPACE)"
     curl -fsSL "$CDN/scripts/upgrade.sh" -o "$DATA_DIR/source/upgrade.sh"
-    if ! bash "$DATA_DIR/source/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE"; then
+    # upgrade.sh also points .env at the registry/namespace/CDN given here
+    if ! COOLIFY_CDN="$CDN" bash "$DATA_DIR/source/upgrade.sh" "$VERSION" "$REGISTRY_URL" "$IMAGE_NAMESPACE"; then
         local log
         log=$(ls -t "$DATA_DIR"/source/upgrade-*.log 2>/dev/null | head -1 || true)
         [ -n "$log" ] && tail -n 30 "$log" >&2
