@@ -120,3 +120,18 @@ it('reports a pending repair in a dry run', function () {
     expect(file_get_contents(__DIR__.'/../../scripts/deploy.sh'))
         ->toContain('echo "  Repair first   : $(unfinished_snapshot) did not finish"');
 });
+
+it('treats a database with fewer core rows than the snapshot as incomplete, not just a complete schema', function () {
+    $script = file_get_contents(__DIR__.'/../../scripts/deploy.sh');
+
+    expect($script)
+        ->toContain("grep -E '^(users|teams|servers) '")
+        ->toContain('[ "$actual" -lt "$expected" ] && { echo incomplete; return; }');
+});
+
+it('refuses to update a database without users', function () {
+    $script = file_get_contents(__DIR__.'/../../scripts/deploy.sh');
+
+    expect($script)->toContain('The Coolify database has no users')
+        ->and(strpos($script, 'SELECT count(*) FROM users;'))->toBeLessThan(strpos($script, 'docker pull -q "$target"'));
+});

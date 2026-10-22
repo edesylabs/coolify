@@ -133,6 +133,12 @@ preflight_update() {
         ok "No deployments in progress"
     fi
 
+    # An installed Coolify always has users. None means its database was emptied or replaced by a
+    # fresh one; updating would snapshot and carry on with the wrong data.
+    [ "$(db_query "SELECT count(*) FROM users;" 2>/dev/null)" -gt 0 ] 2>/dev/null ||
+        fail "The Coolify database has no users: it looks emptied or freshly re-created. Restore it from a backup in $DATA_DIR/backups/deploy before updating."
+    ok "Database has user accounts"
+
     if [ "$SKIP_BACKUP" != "true" ]; then
         local db_bytes free_kb
         db_bytes=$(db_query "SELECT pg_database_size(current_database());" 2>/dev/null || echo 0)
@@ -201,6 +207,13 @@ unfinished_snapshot() {
     return 0
 }
 
+# Prints "<table> <rows>" for every table in a plain pg_dump.
+dump_row_counts() {
+    gunzip -c "$1" | awk '$1 == "COPY" { table = $2; sub(/^public\./, "", table); rows = 0; inside = 1; next }
+        inside && $0 == "\\." { print table, rows; inside = 0; next }
+        inside { rows++ }'
+}
+
 # A plain pg_dump creates the constraints after loading all data, so a restore that was cut
 # short is missing them. The last constraint in the dump existing means the restore completed.
 # Prints complete, incomplete or unknown (could not check: never treated as incomplete).
@@ -213,7 +226,16 @@ database_state() {
         # The database itself is gone (dropped by an interrupted restore)
         [ "$result" = "0" ] && { echo incomplete; return; }
         result=$(db_query "SELECT count(*) FROM pg_constraint WHERE conname = '$last';" 2>/dev/null) || { echo unknown; return; }
-        case "$result" in 1) echo complete ;; 0) echo incomplete ;; *) echo unknown ;; esac
+        case "$result" in 0) echo incomplete; return ;; 1) ;; *) echo unknown; return ;; esac
+        # A complete schema is not enough: a Coolify that started on an emptied database migrates
+        # and seeds a fresh, empty instance. Its core tables must hold at least the dump's rows.
+        local table expected actual
+        while read -r table expected; do
+            actual=$(db_query "SELECT count(*) FROM public.$table;" 2>/dev/null) || { echo unknown; return; }
+            case "$actual" in '' | *[!0-9]*) echo unknown; return ;; esac
+            [ "$actual" -lt "$expected" ] && { echo incomplete; return; }
+        done < <(dump_row_counts "$dump" | grep -E '^(users|teams|servers) ')
+        echo complete
     else
         # Nothing to compare against: at least require the foreign keys a finished restore has
         result=$(db_query "SELECT count(*) > 0 FROM pg_constraint WHERE contype = 'f' AND connamespace = 'public'::regnamespace;" 2>/dev/null) || { echo unknown; return; }
