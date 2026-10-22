@@ -68,7 +68,7 @@ it('pulls the target image before changing anything', function () {
     $script = file_get_contents(__DIR__.'/../../scripts/deploy.sh');
 
     expect(strpos($script, 'docker pull -q "$target"'))->toBeLessThan(strpos($script, "\nsnapshot() {"))
-        ->and($script)->toContain("run_update() {\n    preflight_update\n    snapshot\n");
+        ->and($script)->toContain("    recover_unfinished_deploy\n    preflight_update\n    snapshot\n");
 });
 
 it('verifies migrations explicitly because the startup migration always exits 0', function () {
@@ -99,6 +99,22 @@ it('waits for the background container restart of upgrade.sh before verifying or
         ->toContain("grep -q 'Container restart sequence started in background' \"\$UPGRADE_LOG\"")
         ->toContain("! grep -q 'Step 6/6: Upgrade complete' \"\$UPGRADE_LOG\"")
         ->toContain('Not rolling back while it runs')
-        ->and(strpos($script, 'wait_for_restart || fail'))->toBeGreaterThan(strpos($script, 'bash "$SOURCE_DIR/upgrade.sh"'))
-        ->and(strpos($script, 'if restart_in_progress; then'))->toBeLessThan(strpos($script, 'if wait_for_database && restore_database; then'));
+        ->and(strpos($script, 'wait_for_restart || fail "upgrade.sh did not finish restarting the containers'))->toBeGreaterThan(strpos($script, 'bash "$SOURCE_DIR/upgrade.sh"'))
+        ->and(strpos($script, 'if restart_in_progress; then', strpos($script, "\nrollback() {")))->toBeLessThan(strpos($script, 'if restore_snapshot; then'));
+});
+
+it('repairs an unfinished earlier run before updating, restoring only an incomplete database', function () {
+    $script = file_get_contents(__DIR__.'/../../scripts/deploy.sh');
+
+    expect($script)
+        ->toContain("run_update() {\n    recover_unfinished_deploy\n    preflight_update\n")
+        ->toContain('done | rolled-back | recovered) ;;')
+        ->toContain("SELECT count(*) FROM pg_constraint WHERE conname = '\$last';")
+        ->toContain("mark_snapshot done\nok \"Coolify \$VERSION deployed successfully\"")
+        ->and(strpos($script, 'if database_complete "$unfinished"; then'))->toBeLessThan(strpos($script, 'restore_snapshot || fail "Automatic repair failed.'));
+});
+
+it('reports a pending repair in a dry run', function () {
+    expect(file_get_contents(__DIR__.'/../../scripts/deploy.sh'))
+        ->toContain('echo "  Repair first   : $(unfinished_snapshot) did not finish"');
 });

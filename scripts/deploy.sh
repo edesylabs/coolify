@@ -15,6 +15,9 @@
 ##       4. verifies: container healthy, expected image, PHP version, all migrations applied
 ##       5. on any failure in 3-4: automatic rollback (restores config + database,
 ##          restarts the previous image)
+##   - a previous run did not finish (crash, lost SSH session, failed rollback)
+##                   -> repairs it first: restores that run's snapshot if the database is
+##                      incomplete, then continues with the update. Just run the same command again.
 ##
 ## Environment variables:
 ##   COOLIFY_CDN              Where scripts and compose files are fetched from (default: this repo's main branch)
@@ -170,7 +173,42 @@ snapshot() {
         ok "Database snapshot saved ($(du -h "$SNAPSHOT_DIR/coolify-db.sql.gz" | cut -f1))"
     fi
 
+    mark_snapshot in-progress
     ROLLBACK_ARMED=true
+}
+
+# Each snapshot records how its run ended: in-progress, done, rolled-back, failed or recovered.
+# Snapshots from before this was tracked have no status file.
+mark_snapshot() {
+    [ -n "$SNAPSHOT_DIR" ] && echo "$1" >"$SNAPSHOT_DIR/status"
+    return 0
+}
+
+latest_snapshot() {
+    ls -1d "$DATA_DIR"/backups/deploy/*/ 2>/dev/null | sort | tail -1 | sed 's:/$::'
+}
+
+unfinished_snapshot() {
+    local latest
+    latest=$(latest_snapshot)
+    [ -n "$latest" ] || return 0
+    case "$(cat "$latest/status" 2>/dev/null || echo unknown)" in
+        done | rolled-back | recovered) ;;
+        *) echo "$latest" ;;
+    esac
+}
+
+# A plain pg_dump creates the constraints after loading all data, so a restore that was cut
+# short is missing them. The last constraint in the dump existing means the restore completed.
+database_complete() {
+    local dump="$1/coolify-db.sql.gz" last=""
+    [ -f "$dump" ] && last=$(gunzip -c "$dump" | sed -nE 's/^    ADD CONSTRAINT "?([^" ]+)"? .*/\1/p' | tail -1)
+    if [ -n "$last" ]; then
+        [ "$(db_query "SELECT count(*) FROM pg_constraint WHERE conname = '$last';" 2>/dev/null)" = "1" ]
+    else
+        # Nothing to compare against: at least require the foreign keys a finished restore has
+        [ "$(db_query "SELECT count(*) > 0 FROM pg_constraint WHERE contype = 'f' AND connamespace = 'public'::regnamespace;" 2>/dev/null)" = "t" ]
+    fi
 }
 
 wait_for_healthy() {
@@ -242,20 +280,8 @@ restore_database() {
         gunzip -c "$dump" | docker exec -i coolify-db psql -U "$user" -d "$database" -v ON_ERROR_STOP=1 -q >/dev/null
 }
 
-rollback() {
-    ROLLING_BACK=true
-    echo ""
-    warn "Update failed — rolling back to $PREVIOUS_IMAGE"
-
-    if restart_in_progress; then
-        info "upgrade.sh is still restarting the containers; waiting for it to finish first"
-        if ! wait_for_restart; then
-            echo -e "${RED}✗${NC} upgrade.sh is still running after ${HEALTH_TIMEOUT}s (log: $UPGRADE_LOG)." >&2
-            echo -e "${RED}✗${NC} Not rolling back while it runs. Snapshot kept at $SNAPSHOT_DIR" >&2
-            return
-        fi
-    fi
-
+# Puts back the configuration, database and image saved in $SNAPSHOT_DIR.
+restore_snapshot() {
     local failed=false
     for file in .env docker-compose.yml docker-compose.prod.yml docker-compose.custom.yml; do
         [ -f "$SNAPSHOT_DIR/$file" ] && cp -p "$SNAPSHOT_DIR/$file" "$SOURCE_DIR/$file"
@@ -292,12 +318,71 @@ rollback() {
         fi
     fi
 
+    [ "$failed" = "false" ]
+}
+
+rollback() {
+    ROLLING_BACK=true
     echo ""
-    if [ "$failed" = "true" ]; then
-        echo -e "${RED}✗${NC} Rollback incomplete. Snapshot kept at $SNAPSHOT_DIR" >&2
-    else
-        echo -e "${YELLOW}⚠${NC} Rolled back to $PREVIOUS_IMAGE. Snapshot kept at $SNAPSHOT_DIR" >&2
+    warn "Update failed — rolling back to $PREVIOUS_IMAGE"
+
+    if restart_in_progress; then
+        info "upgrade.sh is still restarting the containers; waiting for it to finish first"
+        if ! wait_for_restart; then
+            mark_snapshot failed
+            echo -e "${RED}✗${NC} upgrade.sh is still running after ${HEALTH_TIMEOUT}s (log: $UPGRADE_LOG)." >&2
+            echo -e "${RED}✗${NC} Not rolling back while it runs. Run this command again later to repair. Snapshot: $SNAPSHOT_DIR" >&2
+            return
+        fi
     fi
+
+    echo ""
+    if restore_snapshot; then
+        mark_snapshot rolled-back
+        echo -e "${YELLOW}⚠${NC} Rolled back to $PREVIOUS_IMAGE. Snapshot kept at $SNAPSHOT_DIR" >&2
+    else
+        mark_snapshot failed
+        echo -e "${RED}✗${NC} Rollback incomplete. Run this command again to repair. Snapshot kept at $SNAPSHOT_DIR" >&2
+    fi
+}
+
+# Repairs the server when an earlier run stopped half-way, so the same command can simply be re-run.
+recover_unfinished_deploy() {
+    local unfinished
+    unfinished=$(unfinished_snapshot)
+    [ -n "$unfinished" ] || return 0
+
+    warn "The previous deploy ($unfinished) did not finish; checking the installation"
+    SNAPSHOT_DIR="$unfinished"
+    PREVIOUS_IMAGE=$(cat "$unfinished/previous-image" 2>/dev/null || echo none)
+
+    UPGRADE_LOG=$(find "$SOURCE_DIR" -maxdepth 1 -name 'upgrade-*.log' -newer "$unfinished/previous-image" -mmin -30 2>/dev/null | sort | tail -1)
+    if restart_in_progress; then
+        info "Waiting for a running upgrade.sh restart to finish"
+        wait_for_restart || fail "upgrade.sh is still restarting the containers (log: $UPGRADE_LOG). Run this command again in a few minutes."
+    fi
+
+    # Judge the database itself, not a stopped container
+    if [ "$(docker inspect coolify-db --format '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
+        local tag
+        tag=$(current_image)
+        compose_up "$([ "$tag" = none ] && echo latest || echo "${tag##*:}")" postgres redis >/dev/null 2>&1 || true
+    fi
+    wait_for_database || true
+
+    if database_complete "$unfinished"; then
+        ok "Database is intact; no restore needed"
+    else
+        [ -f "$unfinished/coolify-db.sql.gz" ] || fail "The database is incomplete and $unfinished has no database dump to restore."
+        warn "The database is incomplete; restoring the snapshot taken before that deploy"
+        restore_snapshot || fail "Automatic repair failed. Snapshot kept at $unfinished"
+        ok "Restored $PREVIOUS_IMAGE with its database"
+    fi
+    mark_snapshot recovered
+
+    SNAPSHOT_DIR=""
+    PREVIOUS_IMAGE=""
+    UPGRADE_LOG=""
 }
 
 run_install() {
@@ -307,6 +392,7 @@ run_install() {
 }
 
 run_update() {
+    recover_unfinished_deploy
     preflight_update
     snapshot
 
@@ -370,6 +456,7 @@ echo "Coolify deploy — $REGISTRY_URL/$IMAGE_NAMESPACE"
 echo "  Target version : $VERSION"
 echo "  Current image  : $(current_image)"
 echo "  Action         : $MODE"
+[ "$MODE" = "update" ] && [ -n "$(unfinished_snapshot)" ] && echo "  Repair first   : $(unfinished_snapshot) did not finish"
 echo ""
 
 if [ "$DRY_RUN" = "true" ]; then
@@ -386,5 +473,6 @@ fi
 verify_deployment
 verify_migrations
 echo ""
+mark_snapshot done
 ok "Coolify $VERSION deployed successfully"
 [ -n "$SNAPSHOT_DIR" ] && info "Pre-update snapshot kept at $SNAPSHOT_DIR"
