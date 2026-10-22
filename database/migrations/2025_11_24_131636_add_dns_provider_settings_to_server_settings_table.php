@@ -8,22 +8,27 @@ return new class extends Migration
 {
     /**
      * Run the migrations.
+     *
+     * The wildcard SSL migration (2025_10_28_000001) already adds these columns, so only
+     * add whichever is missing. Without the guards this fails on every fresh database and
+     * blocks all later migrations.
      */
     public function up(): void
     {
         Schema::table('server_settings', function (Blueprint $table) {
-            $table->string('dns_provider')->nullable()->after('wildcard_domain');
-            $table->text('dns_provider_credentials')->nullable()->after('dns_provider');
+            if (! Schema::hasColumn('server_settings', 'dns_provider')) {
+                $table->string('dns_provider')->nullable()->after('wildcard_domain');
+            }
+            if (! Schema::hasColumn('server_settings', 'dns_provider_credentials')) {
+                $table->text('dns_provider_credentials')->nullable()->after('dns_provider');
+            }
         });
     }
 
     /**
      * Reverse the migrations.
+     *
+     * The columns belong to 2025_10_28_000001, whose rollback drops them.
      */
-    public function down(): void
-    {
-        Schema::table('server_settings', function (Blueprint $table) {
-            $table->dropColumn(['dns_provider', 'dns_provider_credentials']);
-        });
-    }
+    public function down(): void {}
 };

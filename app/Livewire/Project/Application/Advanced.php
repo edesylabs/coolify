@@ -91,6 +91,7 @@ class Advanced extends Component
 
     #[Validate(['boolean'])]
     public bool $isDynamicDomainEnabled = false;
+
     #[Validate(['integer', 'min:0'])]
     public int $maxRestartCount = 0;
 

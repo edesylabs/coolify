@@ -79,7 +79,7 @@ class Teams extends Component
         }
     }
 
-    public function syncData(bool $toModel = false)
+    private function syncData(bool $toModel = false): void
     {
         if ($toModel) {
             $this->validate();
@@ -144,6 +144,7 @@ class Teams extends Component
     public function instantSave()
     {
         try {
+            $this->authorize('update', $this->settings);
             $this->syncData(true);
         } catch (\Throwable $e) {
             return handleError($e, $this);
@@ -156,6 +157,7 @@ class Teams extends Component
     {
         try {
             $this->resetErrorBag();
+            $this->authorize('update', $this->settings);
             $this->syncData(true);
             $this->saveModel();
         } catch (\Throwable $e) {
@@ -165,6 +167,7 @@ class Teams extends Component
 
     public function saveModel()
     {
+        $this->authorize('update', $this->settings);
         $this->syncData(true);
         refreshSession();
         $this->dispatch('success', 'Settings saved.');

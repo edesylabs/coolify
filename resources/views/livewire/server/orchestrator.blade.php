@@ -13,12 +13,13 @@
         </div>
 
         <div class="flex flex-col gap-2 py-4">
-            <x-forms.select id="orchestrator" label="Orchestrator Type"
-                helper="Select the orchestration system for this server">
-                <option value="none">None (Standalone Docker)</option>
-                <option value="swarm">Docker Swarm</option>
-                <option value="kubernetes">Kubernetes</option>
-            </x-forms.select>
+            <x-forms.listbox id="orchestrator" label="Orchestrator Type"
+                helper="Select the orchestration system for this server" canGate="update" :canResource="$server"
+                :options="[
+                    ['value' => 'none', 'label' => 'None (Standalone Docker)'],
+                    ['value' => 'swarm', 'label' => 'Docker Swarm'],
+                    ['value' => 'kubernetes', 'label' => 'Kubernetes'],
+                ]" />
 
             @if ($orchestrator === 'swarm')
                 <div class="pt-4">

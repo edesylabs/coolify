@@ -50,19 +50,19 @@
             />
 
             {{-- DNS Provider Selection --}}
-            <x-forms.select
-                wire:model.live="dnsProvider"
+            <x-forms.listbox
+                live
                 canGate="update"
                 :canResource="$server"
                 id="dnsProvider"
                 label="DNS Provider"
                 helper="Select your DNS provider for DNS-01 challenge"
-            >
-                <option value="">Select DNS Provider</option>
-                <option value="cloudflare">Cloudflare</option>
-                <option value="route53">AWS Route53</option>
-                <option value="digitalocean">DigitalOcean</option>
-            </x-forms.select>
+                placeholder="Select DNS Provider"
+                :options="[
+                    ['value' => 'cloudflare', 'label' => 'Cloudflare'],
+                    ['value' => 'route53', 'label' => 'AWS Route53'],
+                    ['value' => 'digitalocean', 'label' => 'DigitalOcean'],
+                ]" />
 
             {{-- Cloudflare Credentials --}}
             @if ($dnsProvider === 'cloudflare')

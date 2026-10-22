@@ -6,7 +6,9 @@ use App\Actions\Application\CleanupPreviewDeployment;
 use App\Actions\Application\LoadComposeFile;
 use App\Actions\Application\StopApplication;
 use App\Enums\BuildPackTypes;
+use App\Events\DomainProvisioningStarted;
 use App\Http\Controllers\Controller;
+use App\Jobs\CheckCertificateStatusJob;
 use App\Jobs\DeleteResourceJob;
 use App\Models\Application;
 use App\Models\ApplicationPreview;
@@ -6522,14 +6524,14 @@ class ApplicationsController extends Controller
         }
 
         // Dispatch provisioning started event
-        event(new \App\Events\DomainProvisioningStarted(
+        event(new DomainProvisioningStarted(
             $application,
             $newDomains->toArray(),
             $certificateType
         ));
 
         // Dispatch certificate status polling job
-        \App\Jobs\CheckCertificateStatusJob::dispatch(
+        CheckCertificateStatusJob::dispatch(
             $application,
             $newDomains->toArray(),
             $certificateType,

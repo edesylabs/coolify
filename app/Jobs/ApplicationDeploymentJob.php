@@ -21,6 +21,7 @@ use App\Models\StandaloneDocker;
 use App\Models\SwarmDocker;
 use App\Notifications\Application\DeploymentFailed;
 use App\Notifications\Application\DeploymentSuccess;
+use App\Services\Orchestrator\OrchestratorFactory;
 use App\Support\RemoteSecretReferences;
 use App\Support\RemoteSecretValueFormatter;
 use App\Support\ValidationPatterns;
@@ -4855,10 +4856,10 @@ COPY ./nginx.conf /etc/nginx/conf.d/default.conf");
         try {
             $this->application_deployment_queue->addLogEntry('Starting Kubernetes deployment...');
 
-            $orchestrator = \App\Services\Orchestrator\OrchestratorFactory::make($this->application);
+            $orchestrator = OrchestratorFactory::make($this->application);
 
             if (! $orchestrator->deploy($this->application, $this->production_image_name)) {
-                throw new \Exception('Kubernetes deployment failed.');
+                throw new Exception('Kubernetes deployment failed.');
             }
 
             $this->application_deployment_queue->addLogEntry('Kubernetes resources created successfully.');
@@ -4872,7 +4873,7 @@ COPY ./nginx.conf /etc/nginx/conf.d/default.conf");
             ]);
 
             $this->application_deployment_queue->addLogEntry('Deployment ready.');
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->application_deployment_queue->addLogEntry('Kubernetes deployment failed: '.$e->getMessage());
             throw $e;
         }

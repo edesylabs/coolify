@@ -8,6 +8,7 @@ use App\Models\Server;
 use App\Support\ValidationPatterns;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use Spatie\Url\Url;
 use Symfony\Component\Yaml\Tag\TaggedValue;
 use Symfony\Component\Yaml\Yaml;
 
@@ -829,7 +830,7 @@ function generateDefaultProxyConfiguration(Server $server, array $custom_command
 
             // Add DNS provider environment variables
             $credentials = $server->settings->dns_provider_credentials ?? [];
-            if (!empty($credentials)) {
+            if (! empty($credentials)) {
                 $config['services']['traefik']['environment'] = $config['services']['traefik']['environment'] ?? [];
 
                 // Provider-specific environment variables
@@ -975,7 +976,7 @@ function writeDynamicConfigurationForApplication(Application $application): void
     // Process each domain
     foreach ($domains as $index => $domain) {
         $domain = trim($domain);
-        $url = \Spatie\Url\Url::fromString($domain);
+        $url = Url::fromString($domain);
         $host = $url->getHost();
         $path = $url->getPath() ?: '/';
         $schema = $url->getScheme();
