@@ -157,6 +157,7 @@ jobs:
     needs: bump-version
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - image: coolify

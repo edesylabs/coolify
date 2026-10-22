@@ -11,11 +11,11 @@ ARG DOCKER_BUILDX_VERSION=0.25.0
 ARG PACK_VERSION=0.38.2
 # https://github.com/railwayapp/nixpacks/releases
 ARG NIXPACKS_VERSION=1.41.0
-# https://github.com/minio/mc/releases
-ARG MINIO_VERSION=RELEASE.2025-08-13T08-35-41Z
+# https://quay.io/repository/minio/aistor/mc?tab=tags (minio/mc was removed from Docker Hub)
+ARG MINIO_VERSION=RELEASE.2026-09-06T02-44-40Z
 
 
-FROM minio/mc:${MINIO_VERSION} AS minio-client
+FROM quay.io/minio/aistor/mc:${MINIO_VERSION} AS minio-client
 
 FROM ${BASE_IMAGE} AS base
 

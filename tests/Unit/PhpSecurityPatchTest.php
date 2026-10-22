@@ -18,6 +18,18 @@ it('pins a patched serversideup base image in the Dockerfiles', function (string
     'development' => 'docker/development/Dockerfile',
 ]);
 
+it('pulls the MinIO client from quay.io instead of the removed Docker Hub image', function (string $dockerfile) {
+    $contents = file_get_contents(__DIR__.'/../../'.$dockerfile);
+
+    expect($contents)
+        ->toContain('FROM quay.io/minio/aistor/mc:${MINIO_VERSION} AS minio-client')
+        ->not->toContain('FROM minio/mc:');
+})->with([
+    'production' => 'docker/production/Dockerfile',
+    'development' => 'docker/development/Dockerfile',
+    'helper' => 'docker/coolify-helper/Dockerfile',
+]);
+
 it('refreshes the base image when building in CI', function (string $workflow) {
     expect(file_get_contents(__DIR__.'/../../.github/workflows/'.$workflow))->toContain('pull: true');
 })->with([
