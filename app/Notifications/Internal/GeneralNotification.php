@@ -17,7 +17,7 @@ class GeneralNotification extends Notification implements ShouldQueue
 
     public $tries = 1;
 
-    public function __construct(public string $message)
+    public function __construct(public string $message, public bool $success = true)
     {
         $this->onQueue('high');
     }
@@ -30,9 +30,9 @@ class GeneralNotification extends Notification implements ShouldQueue
     public function toDiscord(): DiscordMessage
     {
         return new DiscordMessage(
-            title: 'Coolify: General Notification',
+            title: $this->success ? 'Coolify: General Notification' : 'Coolify: Action required',
             description: $this->message,
-            color: DiscordMessage::infoColor(),
+            color: $this->success ? DiscordMessage::infoColor() : DiscordMessage::errorColor(),
         );
     }
 
@@ -46,8 +46,8 @@ class GeneralNotification extends Notification implements ShouldQueue
     public function toPushover(): PushoverMessage
     {
         return new PushoverMessage(
-            title: 'General Notification',
-            level: 'info',
+            title: $this->success ? 'General Notification' : 'Action required',
+            level: $this->success ? 'info' : 'error',
             message: $this->message,
         );
     }
@@ -55,9 +55,9 @@ class GeneralNotification extends Notification implements ShouldQueue
     public function toSlack(): SlackMessage
     {
         return new SlackMessage(
-            title: 'Coolify: General Notification',
+            title: $this->success ? 'Coolify: General Notification' : 'Coolify: Action required',
             description: $this->message,
-            color: SlackMessage::infoColor(),
+            color: $this->success ? SlackMessage::infoColor() : SlackMessage::errorColor(),
         );
     }
 
@@ -77,5 +77,15 @@ class GeneralNotification extends Notification implements ShouldQueue
             description: $this->message,
             color: GoogleChatMessage::infoColor()
         );
+    }
+
+    public function toWebhook(): array
+    {
+        return [
+            'success' => $this->success,
+            'message' => $this->message,
+            'event' => 'general',
+            'url' => base_url(),
+        ];
     }
 }

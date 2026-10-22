@@ -20,15 +20,22 @@ class SlackNotificationSettings extends Model
         'deployment_success_slack_notifications',
         'deployment_failure_slack_notifications',
         'status_change_slack_notifications',
+        'restart_limit_reached_slack_notifications',
         'backup_success_slack_notifications',
         'backup_failure_slack_notifications',
         'scheduled_task_success_slack_notifications',
         'scheduled_task_failure_slack_notifications',
-        'docker_cleanup_slack_notifications',
+        'docker_cleanup_success_slack_notifications',
+        'docker_cleanup_failure_slack_notifications',
         'server_disk_usage_slack_notifications',
         'server_reachable_slack_notifications',
         'server_unreachable_slack_notifications',
         'server_patch_slack_notifications',
+        'traefik_outdated_slack_notifications',
+    ];
+
+    protected $hidden = [
+        'slack_webhook_url',
     ];
 
     protected $casts = [
@@ -38,6 +45,7 @@ class SlackNotificationSettings extends Model
         'deployment_success_slack_notifications' => 'boolean',
         'deployment_failure_slack_notifications' => 'boolean',
         'status_change_slack_notifications' => 'boolean',
+        'restart_limit_reached_slack_notifications' => 'boolean',
         'backup_success_slack_notifications' => 'boolean',
         'backup_failure_slack_notifications' => 'boolean',
         'scheduled_task_success_slack_notifications' => 'boolean',
@@ -47,6 +55,7 @@ class SlackNotificationSettings extends Model
         'server_reachable_slack_notifications' => 'boolean',
         'server_unreachable_slack_notifications' => 'boolean',
         'server_patch_slack_notifications' => 'boolean',
+        'traefik_outdated_slack_notifications' => 'boolean',
     ];
 
     public function team()

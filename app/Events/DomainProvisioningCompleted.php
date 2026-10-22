@@ -25,7 +25,7 @@ class DomainProvisioningCompleted implements ShouldBroadcast
         if (is_null($teamId) && auth()->check() && auth()->user()->currentTeam()) {
             $teamId = auth()->user()->currentTeam()->id;
         } elseif (is_null($teamId)) {
-            $teamId = $application->team->id ?? null;
+            $teamId = $application->team()?->id;
         }
         $this->teamId = $teamId;
     }

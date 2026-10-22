@@ -1,14 +1,17 @@
 # Versions
-# https://hub.docker.com/r/serversideup/php/tags?name=8.4-fpm-nginx-alpine
-# Pinned: v4.5.3 ships PHP 8.4.27 (fixes CVE-2026-109618 / CVE-2026-109619)
-ARG SERVERSIDEUP_PHP_VERSION=8.4-fpm-nginx-alpine-v4.5.3
-# https://quay.io/repository/minio/aistor/mc?tab=tags (minio/mc was removed from Docker Hub)
-ARG MINIO_VERSION=RELEASE.2026-09-06T02-44-40Z
+# Temporary: serversideup/php v4.5.1 (8.4-fpm-nginx-alpine) rebuilt on the patched PHP 8.4 release
+ARG SERVERSIDEUP_PHP_IMAGE=ghcr.io/coollabsio/serversideup-php:8.4-fpm-nginx-alpine-v4.5.1-hotfix
 # https://github.com/cloudflare/cloudflared/releases
-ARG CLOUDFLARED_VERSION=2025.7.0
+ARG CLOUDFLARED_VERSION=2026.10.3
 # https://www.postgresql.org/support/versioning/
-# Client 18 is used against the Postgres 15 server: postgresql15-client was removed in Alpine 3.23+ (pg_dump/psql support older servers)
+# Note: We are using version 18 of the postgres client (while still using postgres 15 for the postgres server) as version 15 has been removed from Alpine 3.23+ https://pkgs.alpinelinux.org/packages?name=postgresql*-client&branch=v3.23&repo=&arch=x86_64&origin=&flagged=&maintainer=
 ARG POSTGRES_VERSION=18
+# https://nginx.org/en/linux_packages.html
+ARG NGINX_VERSION=1.31.2-r1
+# https://nodejs.org/en/about/previous-releases
+ARG NODE_VERSION=24.22.1
+# https://pecl.php.net/package/uv
+ARG PHP_UV_VERSION=0.3.0
 
 # Add user/group
 ARG USER_ID=9999
@@ -17,9 +20,22 @@ ARG GROUP_ID=9999
 # =================================================================
 # Stage 1: Composer dependencies
 # =================================================================
-FROM serversideup/php:${SERVERSIDEUP_PHP_VERSION} AS base
+FROM ${SERVERSIDEUP_PHP_IMAGE} AS base
 
 USER root
+
+# Install patched Nginx from the official nginx.org Alpine repository
+ARG NGINX_VERSION
+RUN set -eux; \
+    apk add --no-cache ca-certificates curl; \
+    NGINX_ALPINE_VERSION="$(egrep -o '^[0-9]+\.[0-9]+' /etc/alpine-release)"; \
+    NGINX_REPOSITORY="https://nginx.org/packages/mainline/alpine/v${NGINX_ALPINE_VERSION}/main"; \
+    sed -i 's|http://nginx.org/packages|https://nginx.org/packages|g' /etc/apk/repositories; \
+    grep -qxF "@nginx ${NGINX_REPOSITORY}" /etc/apk/repositories || echo "@nginx ${NGINX_REPOSITORY}" >> /etc/apk/repositories; \
+    curl -fsSL https://nginx.org/keys/nginx_signing.rsa.pub -o /etc/apk/keys/nginx_signing.rsa.pub; \
+    apk add --no-cache --upgrade "nginx@nginx=${NGINX_VERSION}"; \
+    rm -f /etc/nginx/nginx.conf /etc/nginx/conf.d/default.conf; \
+    nginx -v
 
 ARG USER_ID
 ARG GROUP_ID
@@ -34,10 +50,15 @@ RUN --mount=type=cache,target=/tmp/cache \
 
 USER www-data
 
+# Temporary: the node:24.22.1 multi-arch manifest is not published yet, pull the per-arch image instead
+FROM amd64/node:${NODE_VERSION}-alpine3.24 AS nodejs-amd64
+FROM arm64v8/node:${NODE_VERSION}-alpine3.24 AS nodejs-arm64
+FROM nodejs-${TARGETARCH} AS nodejs
+
 # =================================================================
 # Stage 2: Frontend assets compilation
 # =================================================================
-FROM node:24-alpine AS static-assets
+FROM nodejs AS static-assets
 
 WORKDIR /app
 COPY package*.json vite.config.js postcss.config.cjs ./
@@ -49,23 +70,61 @@ RUN npm run build
 # =================================================================
 # Stage 3: Get MinIO client
 # =================================================================
-FROM quay.io/minio/aistor/mc:${MINIO_VERSION} AS minio-client
+FROM quay.io/minio/aistor/mc:RELEASE.2026-09-06T02-44-40Z AS minio-client
+
+# =================================================================
+# Stage 4: Terminal dependencies (match the production Node.js ABI and libc)
+# =================================================================
+FROM ${SERVERSIDEUP_PHP_IMAGE} AS terminal-dependencies
+
+USER root
+
+RUN apk upgrade && \
+    apk add --no-cache make g++ python3
+COPY --from=nodejs /usr/local/bin/node /usr/local/bin/node
+COPY --from=nodejs /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+COPY docker/coolify-terminal/package*.json /terminal/
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --prefix /terminal && \
+    npm rebuild node-pty --prefix /terminal --update-binary && \
+    rm -rf /terminal/node_modules/node-pty/prebuilds/darwin-* \
+        /terminal/node_modules/node-pty/prebuilds/win32-*
+COPY docker/coolify-terminal/terminal-server.js /terminal/terminal-server.js
+COPY docker/coolify-terminal/terminal-utils.js /terminal/terminal-utils.js
 
 # =================================================================
 # Final Stage: Production image
 # =================================================================
-FROM serversideup/php:${SERVERSIDEUP_PHP_VERSION}
+FROM ${SERVERSIDEUP_PHP_IMAGE}
 
 ARG USER_ID
 ARG GROUP_ID
 ARG TARGETPLATFORM
 ARG POSTGRES_VERSION
 ARG CLOUDFLARED_VERSION
+ARG NGINX_VERSION
+ARG PHP_UV_VERSION
+ARG COOLIFY_VERSION
 ARG CI=true
+
+ENV COOLIFY_VERSION=${COOLIFY_VERSION}
 
 WORKDIR /var/www/html
 
 USER root
+
+# Install patched Nginx from the official nginx.org Alpine repository
+RUN set -eux; \
+    apk add --no-cache ca-certificates curl; \
+    NGINX_ALPINE_VERSION="$(egrep -o '^[0-9]+\.[0-9]+' /etc/alpine-release)"; \
+    NGINX_REPOSITORY="https://nginx.org/packages/mainline/alpine/v${NGINX_ALPINE_VERSION}/main"; \
+    sed -i 's|http://nginx.org/packages|https://nginx.org/packages|g' /etc/apk/repositories; \
+    grep -qxF "@nginx ${NGINX_REPOSITORY}" /etc/apk/repositories || echo "@nginx ${NGINX_REPOSITORY}" >> /etc/apk/repositories; \
+    curl -fsSL https://nginx.org/keys/nginx_signing.rsa.pub -o /etc/apk/keys/nginx_signing.rsa.pub; \
+    apk add --no-cache --upgrade "nginx@nginx=${NGINX_VERSION}"; \
+    rm -f /etc/nginx/nginx.conf /etc/nginx/conf.d/default.conf; \
+    nginx -v
 
 RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
     docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID --service nginx
@@ -80,12 +139,17 @@ RUN --mount=type=cache,target=/var/cache/apk \
     apk upgrade && \
     apk add --no-cache \
     postgresql${POSTGRES_VERSION}-client \
+    libstdc++ \
     openssh-client \
     git \
     git-lfs \
     jq \
     lsof \
     vim
+
+# Install PHP extensions
+# uv: Reverb uses an ext-uv event loop instead of stream_select(), which fails at 1024 open files (FD_SETSIZE)
+RUN install-php-extensions uv-${PHP_UV_VERSION}
 
 # Configure shell aliases
 RUN echo "alias ll='ls -al'" >> /etc/profile && \
@@ -129,6 +193,10 @@ COPY --chown=www-data:www-data openapi.yaml ./openapi.yaml
 COPY --chown=www-data:www-data changelogs/ ./changelogs/
 
 RUN composer dump-autoload
+
+# Install terminal WebSocket server dependencies
+COPY --from=nodejs /usr/local/bin/node /usr/local/bin/node
+COPY --from=terminal-dependencies --chown=www-data:www-data /terminal /terminal
 
 # Configure Nginx and S6 overlay
 COPY docker/production/etc/nginx/conf.d/custom.conf /etc/nginx/conf.d/custom.conf

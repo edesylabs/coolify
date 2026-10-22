@@ -3,6 +3,7 @@
 use App\Models\EnvironmentVariable;
 use App\Models\S3Storage;
 use App\Models\Server;
+use App\Models\ServiceDatabase;
 use App\Models\StandaloneClickhouse;
 use App\Models\StandaloneDocker;
 use App\Models\StandaloneDragonfly;
@@ -12,18 +13,21 @@ use App\Models\StandaloneMongodb;
 use App\Models\StandaloneMysql;
 use App\Models\StandalonePostgresql;
 use App\Models\StandaloneRedis;
+use App\Models\StandaloneSqlite;
+use App\Models\SwarmDocker;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
-use Visus\Cuid2\Cuid2;
+use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\File\Exception\FileNotFoundException;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
-function create_standalone_postgresql($environmentId, $destinationUuid, ?array $otherData = null, string $databaseImage = 'postgres:16-alpine'): StandalonePostgresql
+function create_standalone_postgresql($environmentId, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null, string $databaseImage = 'postgres:16-alpine'): StandalonePostgresql
 {
-    $destination = StandaloneDocker::where('uuid', $destinationUuid)->firstOrFail();
     $database = new StandalonePostgresql;
-    $database->uuid = (new Cuid2);
+    $database->uuid = new_public_id();
     $database->name = 'postgresql-database-'.$database->uuid;
     $database->image = $databaseImage;
-    $database->postgres_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
+    $database->postgres_password = Str::password(length: 64, symbols: false);
     $database->environment_id = $environmentId;
     $database->destination_id = $destination->id;
     $database->destination_type = $destination->getMorphClass();
@@ -35,14 +39,13 @@ function create_standalone_postgresql($environmentId, $destinationUuid, ?array $
     return $database;
 }
 
-function create_standalone_redis($environment_id, $destination_uuid, ?array $otherData = null): StandaloneRedis
+function create_standalone_redis($environment_id, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null): StandaloneRedis
 {
-    $destination = StandaloneDocker::where('uuid', $destination_uuid)->firstOrFail();
     $database = new StandaloneRedis;
-    $database->uuid = (new Cuid2);
+    $database->uuid = new_public_id();
     $database->name = 'redis-database-'.$database->uuid;
 
-    $redis_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
+    $redis_password = Str::password(length: 64, symbols: false);
     if ($otherData && isset($otherData['redis_password'])) {
         $redis_password = $otherData['redis_password'];
         unset($otherData['redis_password']);
@@ -75,13 +78,12 @@ function create_standalone_redis($environment_id, $destination_uuid, ?array $oth
     return $database;
 }
 
-function create_standalone_mongodb($environment_id, $destination_uuid, ?array $otherData = null): StandaloneMongodb
+function create_standalone_mongodb($environment_id, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null): StandaloneMongodb
 {
-    $destination = StandaloneDocker::where('uuid', $destination_uuid)->firstOrFail();
     $database = new StandaloneMongodb;
-    $database->uuid = (new Cuid2);
+    $database->uuid = new_public_id();
     $database->name = 'mongodb-database-'.$database->uuid;
-    $database->mongo_initdb_root_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
+    $database->mongo_initdb_root_password = Str::password(length: 64, symbols: false);
     $database->environment_id = $environment_id;
     $database->destination_id = $destination->id;
     $database->destination_type = $destination->getMorphClass();
@@ -93,14 +95,13 @@ function create_standalone_mongodb($environment_id, $destination_uuid, ?array $o
     return $database;
 }
 
-function create_standalone_mysql($environment_id, $destination_uuid, ?array $otherData = null): StandaloneMysql
+function create_standalone_mysql($environment_id, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null): StandaloneMysql
 {
-    $destination = StandaloneDocker::where('uuid', $destination_uuid)->firstOrFail();
     $database = new StandaloneMysql;
-    $database->uuid = (new Cuid2);
+    $database->uuid = new_public_id();
     $database->name = 'mysql-database-'.$database->uuid;
-    $database->mysql_root_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
-    $database->mysql_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
+    $database->mysql_root_password = Str::password(length: 64, symbols: false);
+    $database->mysql_password = Str::password(length: 64, symbols: false);
     $database->environment_id = $environment_id;
     $database->destination_id = $destination->id;
     $database->destination_type = $destination->getMorphClass();
@@ -112,14 +113,13 @@ function create_standalone_mysql($environment_id, $destination_uuid, ?array $oth
     return $database;
 }
 
-function create_standalone_mariadb($environment_id, $destination_uuid, ?array $otherData = null): StandaloneMariadb
+function create_standalone_mariadb($environment_id, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null): StandaloneMariadb
 {
-    $destination = StandaloneDocker::where('uuid', $destination_uuid)->firstOrFail();
     $database = new StandaloneMariadb;
-    $database->uuid = (new Cuid2);
+    $database->uuid = new_public_id();
     $database->name = 'mariadb-database-'.$database->uuid;
-    $database->mariadb_root_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
-    $database->mariadb_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
+    $database->mariadb_root_password = Str::password(length: 64, symbols: false);
+    $database->mariadb_password = Str::password(length: 64, symbols: false);
     $database->environment_id = $environment_id;
     $database->destination_id = $destination->id;
     $database->destination_type = $destination->getMorphClass();
@@ -131,13 +131,12 @@ function create_standalone_mariadb($environment_id, $destination_uuid, ?array $o
     return $database;
 }
 
-function create_standalone_keydb($environment_id, $destination_uuid, ?array $otherData = null): StandaloneKeydb
+function create_standalone_keydb($environment_id, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null): StandaloneKeydb
 {
-    $destination = StandaloneDocker::where('uuid', $destination_uuid)->firstOrFail();
     $database = new StandaloneKeydb;
-    $database->uuid = (new Cuid2);
+    $database->uuid = new_public_id();
     $database->name = 'keydb-database-'.$database->uuid;
-    $database->keydb_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
+    $database->keydb_password = Str::password(length: 64, symbols: false);
     $database->environment_id = $environment_id;
     $database->destination_id = $destination->id;
     $database->destination_type = $destination->getMorphClass();
@@ -149,13 +148,12 @@ function create_standalone_keydb($environment_id, $destination_uuid, ?array $oth
     return $database;
 }
 
-function create_standalone_dragonfly($environment_id, $destination_uuid, ?array $otherData = null): StandaloneDragonfly
+function create_standalone_dragonfly($environment_id, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null): StandaloneDragonfly
 {
-    $destination = StandaloneDocker::where('uuid', $destination_uuid)->firstOrFail();
     $database = new StandaloneDragonfly;
-    $database->uuid = (new Cuid2);
+    $database->uuid = new_public_id();
     $database->name = 'dragonfly-database-'.$database->uuid;
-    $database->dragonfly_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
+    $database->dragonfly_password = Str::password(length: 64, symbols: false);
     $database->environment_id = $environment_id;
     $database->destination_id = $destination->id;
     $database->destination_type = $destination->getMorphClass();
@@ -167,13 +165,12 @@ function create_standalone_dragonfly($environment_id, $destination_uuid, ?array 
     return $database;
 }
 
-function create_standalone_clickhouse($environment_id, $destination_uuid, ?array $otherData = null): StandaloneClickhouse
+function create_standalone_clickhouse($environment_id, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null): StandaloneClickhouse
 {
-    $destination = StandaloneDocker::where('uuid', $destination_uuid)->firstOrFail();
     $database = new StandaloneClickhouse;
-    $database->uuid = (new Cuid2);
+    $database->uuid = new_public_id();
     $database->name = 'clickhouse-database-'.$database->uuid;
-    $database->clickhouse_admin_password = \Illuminate\Support\Str::password(length: 64, symbols: false);
+    $database->clickhouse_admin_password = Str::password(length: 64, symbols: false);
     $database->environment_id = $environment_id;
     $database->destination_id = $destination->id;
     $database->destination_type = $destination->getMorphClass();
@@ -185,7 +182,34 @@ function create_standalone_clickhouse($environment_id, $destination_uuid, ?array
     return $database;
 }
 
-function deleteBackupsLocally(string|array|null $filenames, Server $server): void
+function create_standalone_sqlite($environment_id, StandaloneDocker|SwarmDocker $destination, ?array $otherData = null): StandaloneSqlite
+{
+    $database = new StandaloneSqlite;
+    $database->uuid = new_public_id();
+    $database->name = 'sqlite-database-'.$database->uuid;
+    $database->image = 'peakimages/sqlite:3.53.4-v0.1.0';
+    $database->environment_id = $environment_id;
+    $database->destination_id = $destination->id;
+    $database->destination_type = $destination->getMorphClass();
+    if ($otherData) {
+        $database->fill($otherData);
+    }
+    $database->save();
+
+    return $database;
+}
+
+/**
+ * Shell line that pipes $source into $sink and writes the output to $escapedFile. It fails when
+ * either command fails: a plain pipe only reports the exit status of $sink, so a failed dump
+ * would still leave a small, valid archive. POSIX sh (dash, BusyBox ash); no pipefail needed.
+ */
+function pipeToFileKeepingExitStatus(string $source, string $sink, string $escapedFile): string
+{
+    return 'status=$( { { '.$source.'; echo $? >&3; } | '.$sink.' > '.$escapedFile.'; } 3>&1 ) && [ "$status" -eq 0 ]';
+}
+
+function deleteBackupsLocally(string|array|null $filenames, Server $server, bool $throwError = false): void
 {
     if (empty($filenames)) {
         return;
@@ -193,11 +217,51 @@ function deleteBackupsLocally(string|array|null $filenames, Server $server): voi
     if (is_string($filenames)) {
         $filenames = [$filenames];
     }
-    $quotedFiles = array_map(fn ($file) => "\"$file\"", $filenames);
-    instant_remote_process(['rm -f '.implode(' ', $quotedFiles)], $server, throwError: false);
+    $quotedFiles = array_map(fn ($file) => escapeshellarg($file), $filenames);
+    instant_remote_process(['rm -f '.implode(' ', $quotedFiles)], $server, throwError: $throwError);
 
     $foldersToCheck = collect($filenames)->map(fn ($file) => dirname($file))->unique();
     $foldersToCheck->each(fn ($folder) => deleteEmptyBackupFolder($folder, $server));
+}
+
+function streamBackupFromServer(Server $server, string $filename, string $contentType): StreamedResponse
+{
+    $privateKey = $server->privateKey;
+    if (! $privateKey || $privateKey->team_id !== $server->team_id) {
+        throw new RuntimeException('Private key not found for this server.');
+    }
+
+    $disk = Storage::build([
+        'driver' => 'sftp',
+        'host' => formatHostForUrl($server->ip),
+        'port' => (int) $server->port,
+        'username' => $server->user,
+        'privateKey' => $privateKey->getKeyLocation(),
+        'root' => '/',
+    ]);
+
+    if (! $disk->exists($filename)) {
+        throw new FileNotFoundException($filename);
+    }
+
+    return new StreamedResponse(function () use ($disk, $filename) {
+        if (ob_get_level()) {
+            ob_end_clean();
+        }
+        $stream = $disk->readStream($filename);
+        if ($stream === false || is_null($stream)) {
+            abort(500, 'Failed to open stream for the requested file.');
+        }
+        while (! feof($stream)) {
+            echo fread($stream, 2048);
+            flush();
+        }
+
+        fclose($stream);
+    }, 200, [
+        'Content-Type' => $contentType,
+        'Content-Disposition' => 'attachment; filename="'.basename($filename).'"',
+    ]);
 }
 
 function deleteBackupsS3(string|array|null $filenames, S3Storage $s3): void
@@ -218,9 +282,18 @@ function deleteBackupsS3(string|array|null $filenames, S3Storage $s3): void
         'endpoint' => $s3->endpoint,
         'use_path_style_endpoint' => true,
         'aws_url' => $s3->awsUrl(),
+        'throw' => true,
     ]);
 
-    $disk->delete($filenames);
+    try {
+        $deleted = $disk->delete($filenames);
+    } catch (Throwable $exception) {
+        throw new RuntimeException('One or more S3 backup files could not be deleted.', previous: $exception);
+    }
+
+    if (! $deleted) {
+        throw new RuntimeException('One or more S3 backup files could not be deleted.');
+    }
 }
 
 function deleteEmptyBackupFolder($folderPath, Server $server): void
@@ -279,7 +352,7 @@ function removeOldBackups($backup): void
             ->whereNull('s3_uploaded')
             ->delete();
 
-    } catch (\Exception $e) {
+    } catch (Exception $e) {
         throw $e;
     }
 }
@@ -345,7 +418,7 @@ function deleteOldBackupsLocally($backup): Collection
     $processedBackups = collect();
 
     $server = null;
-    if ($backup->database_type === \App\Models\ServiceDatabase::class) {
+    if ($backup->database_type === ServiceDatabase::class) {
         $server = $backup->database->service->server;
     } else {
         $server = $backup->database->destination->server;
@@ -434,8 +507,12 @@ function deleteOldBackupsFromS3($backup): Collection
         ->all();
 
     if (! empty($filesToDelete)) {
-        deleteBackupsS3($filesToDelete, $backup->s3);
-        $processedBackups = $backupsToDelete;
+        try {
+            deleteBackupsS3($filesToDelete, $backup->s3);
+            $processedBackups = $backupsToDelete;
+        } catch (Throwable $e) {
+            report($e);
+        }
     }
 
     return $processedBackups;

@@ -7,9 +7,30 @@ use App\Listeners\SendDomainProvisioningWebhook;
 use App\Models\Application;
 use App\Models\Server;
 use App\Models\ServerSetting;
+use App\Models\StandaloneDocker;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
-use Mockery;
+use Tests\TestCase;
+
+uses(TestCase::class);
+
+/**
+ * Build an unsaved application wired to a server with the given webhook settings,
+ * so the listener can read destination->server->settings without a database.
+ */
+function webhookApplication(array $serverSettings): Application
+{
+    $server = new Server;
+    $server->setRelation('settings', (new ServerSetting)->forceFill($serverSettings));
+
+    $destination = new StandaloneDocker;
+    $destination->setRelation('server', $server);
+
+    $application = (new Application)->forceFill(['uuid' => 'test-uuid', 'name' => 'test-app']);
+    $application->setRelation('destination', $destination);
+
+    return $application;
+}
 
 describe('Webhook Events', function () {
     it('broadcasts domain provisioning started event', function () {
@@ -124,22 +145,7 @@ describe('Webhook Listener', function () {
     it('does not send webhook when webhook is disabled', function () {
         Http::fake();
 
-        $settings = Mockery::mock(ServerSetting::class);
-        $settings->shouldReceive('getAttribute')->with('webhook_enabled')->andReturn(false);
-        $settings->shouldReceive('getAttribute')->with('webhook_url')->andReturn(null);
-
-        $server = Mockery::mock(Server::class);
-        $server->shouldReceive('getAttribute')->with('settings')->andReturn($settings);
-
-        $destination = (object) ['server' => $server];
-
-        $application = Mockery::mock(Application::class);
-        $application->shouldReceive('getAttribute')->with('uuid')->andReturn('test-uuid');
-        $application->shouldReceive('getAttribute')->with('name')->andReturn('test-app');
-        $application->shouldReceive('getAttribute')->with('destination')->andReturn($destination);
-        $application->shouldReceive('getAttribute')->with('team')->andReturn(
-            (object) ['id' => 1]
-        );
+        $application = webhookApplication(['webhook_enabled' => false, 'webhook_url' => null]);
 
         $event = new DomainProvisioningStarted(
             $application,
@@ -148,7 +154,7 @@ describe('Webhook Listener', function () {
             1
         );
 
-        $listener = new SendDomainProvisioningWebhook();
+        $listener = new SendDomainProvisioningWebhook;
         $listener->handle($event);
 
         Http::assertNothingSent();
@@ -157,23 +163,11 @@ describe('Webhook Listener', function () {
     it('sends webhook when webhook is enabled', function () {
         Http::fake();
 
-        $settings = Mockery::mock(ServerSetting::class);
-        $settings->shouldReceive('getAttribute')->with('webhook_enabled')->andReturn(true);
-        $settings->shouldReceive('getAttribute')->with('webhook_url')->andReturn('https://example.com/webhook');
-        $settings->shouldReceive('getAttribute')->with('webhook_secret')->andReturn(null);
-
-        $server = Mockery::mock(Server::class);
-        $server->shouldReceive('getAttribute')->with('settings')->andReturn($settings);
-
-        $destination = (object) ['server' => $server];
-
-        $application = Mockery::mock(Application::class);
-        $application->shouldReceive('getAttribute')->with('uuid')->andReturn('test-uuid');
-        $application->shouldReceive('getAttribute')->with('name')->andReturn('test-app');
-        $application->shouldReceive('getAttribute')->with('destination')->andReturn($destination);
-        $application->shouldReceive('getAttribute')->with('team')->andReturn(
-            (object) ['id' => 1]
-        );
+        $application = webhookApplication([
+            'webhook_enabled' => true,
+            'webhook_url' => 'https://example.com/webhook',
+            'webhook_secret' => null,
+        ]);
 
         $event = new DomainProvisioningStarted(
             $application,
@@ -182,7 +176,7 @@ describe('Webhook Listener', function () {
             1
         );
 
-        $listener = new SendDomainProvisioningWebhook();
+        $listener = new SendDomainProvisioningWebhook;
         $listener->handle($event);
 
         // Webhook job is dispatched (not sent immediately)
@@ -342,7 +336,7 @@ describe('Webhook Payload Structure', function () {
 
 describe('Server Settings Webhook Configuration', function () {
     it('casts webhook_enabled to boolean', function () {
-        $settings = new ServerSetting();
+        $settings = new ServerSetting;
         $casts = $settings->getCasts();
 
         expect($casts)->toHaveKey('webhook_enabled');
@@ -350,7 +344,7 @@ describe('Server Settings Webhook Configuration', function () {
     });
 
     it('encrypts webhook_secret', function () {
-        $settings = new ServerSetting();
+        $settings = new ServerSetting;
         $casts = $settings->getCasts();
 
         expect($casts)->toHaveKey('webhook_secret');

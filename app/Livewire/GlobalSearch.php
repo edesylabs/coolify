@@ -3,7 +3,10 @@
 namespace App\Livewire;
 
 use App\Models\Application;
+use App\Models\CloudInitScript;
+use App\Models\CloudProviderToken;
 use App\Models\Environment;
+use App\Models\IntegrationToken;
 use App\Models\Project;
 use App\Models\Server;
 use App\Models\Service;
@@ -15,6 +18,8 @@ use App\Models\StandaloneMongodb;
 use App\Models\StandaloneMysql;
 use App\Models\StandalonePostgresql;
 use App\Models\StandaloneRedis;
+use App\Models\StandaloneSqlite;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Component;
 
@@ -199,6 +204,7 @@ class GlobalSearch extends Component
             'new redis' => 'redis',
             'new keydb' => 'keydb',
             'new dragonfly' => 'dragonfly',
+            'new sqlite' => 'sqlite',
             'new mongodb' => 'mongodb',
             'new mongo' => 'mongodb',
             'new clickhouse' => 'clickhouse',
@@ -237,7 +243,7 @@ class GlobalSearch extends Component
             'dockerfile', 'docker-compose-empty', 'docker-image',
             // Databases
             'postgresql', 'mysql', 'mariadb', 'redis', 'keydb',
-            'dragonfly', 'mongodb', 'clickhouse',
+            'dragonfly', 'mongodb', 'clickhouse', 'sqlite',
         ]) || str_starts_with($type, 'one-click-service-')) {
             return $user->can('createAnyResource');
         }
@@ -250,14 +256,13 @@ class GlobalSearch extends Component
         // Try to get from Redis cache first
         $cacheKey = self::getCacheKey(auth()->user()->currentTeam()->id);
 
-        $this->allSearchableItems = Cache::remember($cacheKey, 300, function () {
-            ray()->showQueries();
+        $resources = Cache::remember($cacheKey, 300, function () {
             $items = collect();
             $team = auth()->user()->currentTeam();
 
             // Get all applications
             $applications = Application::ownedByCurrentTeam()
-                ->with(['environment.project'])
+                ->with(['environment.project', 'previews:id,application_id,pull_request_id'])
                 ->get()
                 ->map(function ($app) {
                     // Collect all FQDNs from the application
@@ -286,6 +291,16 @@ class GlobalSearch extends Component
 
                     $fqdnsString = $fqdns->implode(' ');
 
+                    // Add PR search terms if preview is enabled
+                    $prSearchTerms = '';
+                    if ($app->preview_enabled ?? false) {
+                        $prIds = collect($app->previews ?? [])
+                            ->pluck('pull_request_id')
+                            ->map(fn ($id) => "pr-{$id} pr{$id} {$id}")
+                            ->implode(' ');
+                        $prSearchTerms = $prIds;
+                    }
+
                     return [
                         'id' => $app->id,
                         'name' => $app->name,
@@ -296,13 +311,13 @@ class GlobalSearch extends Component
                         'project' => $app->environment->project->name ?? null,
                         'environment' => $app->environment->name ?? null,
                         'fqdns' => $fqdns->take(2)->implode(', '), // Show first 2 FQDNs in UI
-                        'search_text' => strtolower($app->name.' '.$app->description.' '.$fqdnsString.' application applications app apps'),
+                        'search_text' => strtolower($app->name.' '.$app->description.' '.$fqdnsString.' '.$app->uuid.' '.$prSearchTerms.' application applications app apps'),
                     ];
                 });
 
             // Get all services
             $services = Service::ownedByCurrentTeam()
-                ->with(['environment.project', 'applications'])
+                ->with(['environment.project', 'applications', 'databases'])
                 ->get()
                 ->map(function ($service) {
                     // Collect all FQDNs from service applications
@@ -315,6 +330,10 @@ class GlobalSearch extends Component
                     }
                     $fqdnsString = $fqdns->implode(' ');
 
+                    // Collect service component names for container search
+                    $serviceAppNames = collect($service->applications ?? [])->pluck('name')->implode(' ');
+                    $serviceDbNames = collect($service->databases ?? [])->pluck('name')->implode(' ');
+
                     return [
                         'id' => $service->id,
                         'name' => $service->name,
@@ -325,7 +344,7 @@ class GlobalSearch extends Component
                         'project' => $service->environment->project->name ?? null,
                         'environment' => $service->environment->name ?? null,
                         'fqdns' => $fqdns->take(2)->implode(', '), // Show first 2 FQDNs in UI
-                        'search_text' => strtolower($service->name.' '.$service->description.' '.$fqdnsString.' service services'),
+                        'search_text' => strtolower($service->name.' '.$service->description.' '.$fqdnsString.' '.$service->uuid.' '.$serviceAppNames.' '.$serviceDbNames.' service services'),
                     ];
                 });
 
@@ -348,7 +367,7 @@ class GlobalSearch extends Component
                             'link' => $db->link(),
                             'project' => $db->environment->project->name ?? null,
                             'environment' => $db->environment->name ?? null,
-                            'search_text' => strtolower($db->name.' postgresql '.$db->description.' database databases db'),
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' postgresql '.$db->description.' database databases db'),
                         ];
                     })
             );
@@ -369,7 +388,7 @@ class GlobalSearch extends Component
                             'link' => $db->link(),
                             'project' => $db->environment->project->name ?? null,
                             'environment' => $db->environment->name ?? null,
-                            'search_text' => strtolower($db->name.' mysql '.$db->description.' database databases db'),
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' mysql '.$db->description.' database databases db'),
                         ];
                     })
             );
@@ -390,7 +409,7 @@ class GlobalSearch extends Component
                             'link' => $db->link(),
                             'project' => $db->environment->project->name ?? null,
                             'environment' => $db->environment->name ?? null,
-                            'search_text' => strtolower($db->name.' mariadb '.$db->description.' database databases db'),
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' mariadb '.$db->description.' database databases db'),
                         ];
                     })
             );
@@ -411,7 +430,7 @@ class GlobalSearch extends Component
                             'link' => $db->link(),
                             'project' => $db->environment->project->name ?? null,
                             'environment' => $db->environment->name ?? null,
-                            'search_text' => strtolower($db->name.' mongodb '.$db->description.' database databases db'),
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' mongodb '.$db->description.' database databases db'),
                         ];
                     })
             );
@@ -432,7 +451,7 @@ class GlobalSearch extends Component
                             'link' => $db->link(),
                             'project' => $db->environment->project->name ?? null,
                             'environment' => $db->environment->name ?? null,
-                            'search_text' => strtolower($db->name.' redis '.$db->description.' database databases db'),
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' redis '.$db->description.' database databases db'),
                         ];
                     })
             );
@@ -453,7 +472,7 @@ class GlobalSearch extends Component
                             'link' => $db->link(),
                             'project' => $db->environment->project->name ?? null,
                             'environment' => $db->environment->name ?? null,
-                            'search_text' => strtolower($db->name.' keydb '.$db->description.' database databases db'),
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' keydb '.$db->description.' database databases db'),
                         ];
                     })
             );
@@ -474,7 +493,7 @@ class GlobalSearch extends Component
                             'link' => $db->link(),
                             'project' => $db->environment->project->name ?? null,
                             'environment' => $db->environment->name ?? null,
-                            'search_text' => strtolower($db->name.' dragonfly '.$db->description.' database databases db'),
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' dragonfly '.$db->description.' database databases db'),
                         ];
                     })
             );
@@ -495,7 +514,28 @@ class GlobalSearch extends Component
                             'link' => $db->link(),
                             'project' => $db->environment->project->name ?? null,
                             'environment' => $db->environment->name ?? null,
-                            'search_text' => strtolower($db->name.' clickhouse '.$db->description.' database databases db'),
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' clickhouse '.$db->description.' database databases db'),
+                        ];
+                    })
+            );
+
+            // SQLite
+            $databases = $databases->merge(
+                StandaloneSqlite::ownedByCurrentTeam()
+                    ->with(['environment.project'])
+                    ->get()
+                    ->map(function ($db) {
+                        return [
+                            'id' => $db->id,
+                            'name' => $db->name,
+                            'type' => 'database',
+                            'subtype' => 'sqlite',
+                            'uuid' => $db->uuid,
+                            'description' => $db->description,
+                            'link' => $db->link(),
+                            'project' => $db->environment->project->name ?? null,
+                            'environment' => $db->environment->name ?? null,
+                            'search_text' => strtolower($db->name.' '.$db->uuid.' sqlite '.$db->description.' database databases db'),
                         ];
                     })
             );
@@ -516,7 +556,6 @@ class GlobalSearch extends Component
                         'search_text' => strtolower($server->name.' '.$server->ip.' '.$server->description.' server servers'),
                     ];
                 });
-            ray($servers);
             // Get all projects
             $projects = Project::ownedByCurrentTeam()
                 ->withCount(['environments', 'applications', 'services'])
@@ -582,143 +621,8 @@ class GlobalSearch extends Component
                     ];
                 });
 
-            // Add navigation routes
-            $navigation = collect([
-                [
-                    'name' => 'Dashboard',
-                    'type' => 'navigation',
-                    'description' => 'Go to main dashboard',
-                    'link' => route('dashboard'),
-                    'search_text' => 'dashboard home main overview',
-                ],
-                [
-                    'name' => 'Servers',
-                    'type' => 'navigation',
-                    'description' => 'View all servers',
-                    'link' => route('server.index'),
-                    'search_text' => 'servers all list view',
-                ],
-                [
-                    'name' => 'Projects',
-                    'type' => 'navigation',
-                    'description' => 'View all projects',
-                    'link' => route('project.index'),
-                    'search_text' => 'projects all list view',
-                ],
-                [
-                    'name' => 'Destinations',
-                    'type' => 'navigation',
-                    'description' => 'View all destinations',
-                    'link' => route('destination.index'),
-                    'search_text' => 'destinations docker networks',
-                ],
-                [
-                    'name' => 'Security',
-                    'type' => 'navigation',
-                    'description' => 'Manage private keys and API tokens',
-                    'link' => route('security.private-key.index'),
-                    'search_text' => 'security private keys ssh api tokens cloud-init scripts',
-                ],
-                [
-                    'name' => 'Cloud-Init Scripts',
-                    'type' => 'navigation',
-                    'description' => 'Manage reusable cloud-init scripts',
-                    'link' => route('security.cloud-init-scripts'),
-                    'search_text' => 'cloud-init scripts cloud init cloudinit initialization startup server setup',
-                ],
-                [
-                    'name' => 'Sources',
-                    'type' => 'navigation',
-                    'description' => 'Manage GitHub apps and Git sources',
-                    'link' => route('source.all'),
-                    'search_text' => 'sources github apps git repositories',
-                ],
-                [
-                    'name' => 'Storages',
-                    'type' => 'navigation',
-                    'description' => 'Manage S3 storage for backups',
-                    'link' => route('storage.index'),
-                    'search_text' => 'storages s3 backups',
-                ],
-                [
-                    'name' => 'Shared Variables',
-                    'type' => 'navigation',
-                    'description' => 'View all shared variables',
-                    'link' => route('shared-variables.index'),
-                    'search_text' => 'shared variables environment all',
-                ],
-                [
-                    'name' => 'Team Shared Variables',
-                    'type' => 'navigation',
-                    'description' => 'Manage team-wide shared variables',
-                    'link' => route('shared-variables.team.index'),
-                    'search_text' => 'shared variables team environment',
-                ],
-                [
-                    'name' => 'Project Shared Variables',
-                    'type' => 'navigation',
-                    'description' => 'Manage project shared variables',
-                    'link' => route('shared-variables.project.index'),
-                    'search_text' => 'shared variables project environment',
-                ],
-                [
-                    'name' => 'Environment Shared Variables',
-                    'type' => 'navigation',
-                    'description' => 'Manage environment shared variables',
-                    'link' => route('shared-variables.environment.index'),
-                    'search_text' => 'shared variables environment',
-                ],
-                [
-                    'name' => 'Tags',
-                    'type' => 'navigation',
-                    'description' => 'View resources by tags',
-                    'link' => route('tags.show'),
-                    'search_text' => 'tags labels organize',
-                ],
-                [
-                    'name' => 'Terminal',
-                    'type' => 'navigation',
-                    'description' => 'Access server terminal',
-                    'link' => route('terminal'),
-                    'search_text' => 'terminal ssh console shell command line',
-                ],
-                [
-                    'name' => 'Profile',
-                    'type' => 'navigation',
-                    'description' => 'Manage your profile and preferences',
-                    'link' => route('profile'),
-                    'search_text' => 'profile account user settings preferences',
-                ],
-                [
-                    'name' => 'Team',
-                    'type' => 'navigation',
-                    'description' => 'Manage team members and settings',
-                    'link' => route('team.index'),
-                    'search_text' => 'team settings members users invitations',
-                ],
-                [
-                    'name' => 'Notifications',
-                    'type' => 'navigation',
-                    'description' => 'Configure email, Discord, Telegram notifications',
-                    'link' => route('notifications.email'),
-                    'search_text' => 'notifications alerts email discord telegram slack pushover',
-                ],
-            ]);
-
-            // Add instance settings only for self-hosted and root team
-            if (! isCloud() && $team->id === 0) {
-                $navigation->push([
-                    'name' => 'Settings',
-                    'type' => 'navigation',
-                    'description' => 'Instance settings and configuration',
-                    'link' => route('settings.index'),
-                    'search_text' => 'settings configuration instance',
-                ]);
-            }
-
             // Merge all collections
-            $items = $items->merge($navigation)
-                ->merge($applications)
+            $items = $items->merge($applications)
                 ->merge($services)
                 ->merge($databases)
                 ->merge($servers)
@@ -727,6 +631,307 @@ class GlobalSearch extends Component
 
             return $items->toArray();
         });
+
+        // Navigation depends on the user's permissions, so it is not part of the team-wide cache
+        $this->allSearchableItems = $this->navigationItems()->merge($resources)->values()->all();
+    }
+
+    private function navigationItems(): Collection
+    {
+        $user = auth()->user();
+        $team = $user->currentTeam();
+
+        // Add navigation routes
+        $navigation = collect([
+            [
+                'name' => 'Dashboard',
+                'type' => 'navigation',
+                'description' => 'Go to main dashboard',
+                'link' => route('dashboard'),
+                'search_text' => 'dashboard home main overview',
+            ],
+            [
+                'name' => 'Servers',
+                'type' => 'navigation',
+                'description' => 'View all servers',
+                'link' => route('server.index'),
+                'search_text' => 'servers all list view',
+            ],
+            [
+                'name' => 'Projects',
+                'type' => 'navigation',
+                'description' => 'View all projects',
+                'link' => route('project.index'),
+                'search_text' => 'projects all list view',
+            ],
+            [
+                'name' => 'Destinations',
+                'type' => 'navigation',
+                'description' => 'View all destinations',
+                'link' => route('destination.index'),
+                'search_text' => 'destinations docker networks',
+            ],
+            [
+                'name' => 'Security',
+                'type' => 'navigation',
+                'description' => 'Manage private keys and API tokens',
+                'link' => route('security.private-key.index'),
+                'search_text' => 'security private keys ssh api tokens cloud-init scripts',
+            ],
+            $user->can('viewAny', CloudInitScript::class) ? [
+                'name' => 'Cloud-Init Scripts',
+                'type' => 'navigation',
+                'description' => 'Manage reusable cloud-init scripts',
+                'link' => route('security.cloud-init-scripts'),
+                'search_text' => 'cloud-init scripts cloud init cloudinit initialization startup server setup',
+            ] : null,
+            [
+                'name' => 'Sources',
+                'type' => 'navigation',
+                'description' => 'Manage GitHub apps and Git sources',
+                'link' => route('source.all'),
+                'search_text' => 'sources github apps git repositories',
+            ],
+            [
+                'name' => 'Storages',
+                'type' => 'navigation',
+                'description' => 'Manage S3 storage for backups',
+                'link' => route('storage.index'),
+                'search_text' => 'storages s3 backups',
+            ],
+            [
+                'name' => 'Shared Variables',
+                'type' => 'navigation',
+                'description' => 'View all shared variables',
+                'link' => route('shared-variables.index'),
+                'search_text' => 'shared variables environment all',
+            ],
+            [
+                'name' => 'Team Shared Variables',
+                'type' => 'navigation',
+                'description' => 'Manage team-wide shared variables',
+                'link' => route('shared-variables.team.index'),
+                'search_text' => 'shared variables team environment',
+            ],
+            [
+                'name' => 'Project Shared Variables',
+                'type' => 'navigation',
+                'description' => 'Manage project shared variables',
+                'link' => route('shared-variables.project.index'),
+                'search_text' => 'shared variables project environment',
+            ],
+            [
+                'name' => 'Environment Shared Variables',
+                'type' => 'navigation',
+                'description' => 'Manage environment shared variables',
+                'link' => route('shared-variables.environment.index'),
+                'search_text' => 'shared variables environment',
+            ],
+            [
+                'name' => 'Tags',
+                'type' => 'navigation',
+                'description' => 'View resources by tags',
+                'link' => route('tags.show'),
+                'search_text' => 'tags labels organize',
+            ],
+            $user->can('canAccessTerminal') ? [
+                'name' => 'Terminal',
+                'type' => 'navigation',
+                'description' => 'Access server terminal',
+                'link' => route('terminal'),
+                'search_text' => 'terminal ssh console shell command line',
+            ] : null,
+            [
+                'name' => 'Profile',
+                'type' => 'navigation',
+                'description' => 'Manage your profile and preferences',
+                'link' => route('profile'),
+                'search_text' => 'profile account user settings preferences',
+            ],
+            [
+                'name' => 'Team',
+                'type' => 'navigation',
+                'description' => 'Manage team members and settings',
+                'link' => route('team.index'),
+                'search_text' => 'team settings members users invitations',
+            ],
+            [
+                'name' => 'Notifications',
+                'type' => 'navigation',
+                'description' => 'Configure email, Discord, Telegram notifications',
+                'link' => route('notifications.email'),
+                'search_text' => 'notifications alerts email discord telegram slack pushover',
+            ],
+            [
+                'name' => 'Analytics',
+                'type' => 'navigation',
+                'description' => 'View traffic analytics for your servers',
+                'link' => route('analytics'),
+                'search_text' => 'analytics traffic requests visitors metrics',
+            ],
+            $user->isAdmin() ? [
+                'name' => 'Registries',
+                'type' => 'navigation',
+                'description' => 'Manage Docker registry credentials',
+                'link' => route('registries.index'),
+                'search_text' => 'registries docker registry credentials login private images',
+            ] : null,
+            [
+                'name' => 'Server Shared Variables',
+                'type' => 'navigation',
+                'description' => 'Manage server shared variables',
+                'link' => route('shared-variables.server.index'),
+                'search_text' => 'shared variables server environment',
+            ],
+            [
+                'name' => 'Team Members',
+                'type' => 'navigation',
+                'description' => 'Manage team members and invitations',
+                'link' => route('team.member.index'),
+                'search_text' => 'team members users invitations invite roles',
+            ],
+            $user->isAdminOfTeam($team->id) ? [
+                'name' => 'Team Audit Log',
+                'type' => 'navigation',
+                'description' => 'View team activity history',
+                'link' => route('team.audit-log'),
+                'search_text' => 'team audit log activity history events',
+            ] : null,
+            isInstanceAdmin() ? [
+                'name' => 'Team Admin View',
+                'type' => 'navigation',
+                'description' => 'Manage all users of this instance',
+                'link' => route('team.admin-view'),
+                'search_text' => 'team admin view users instance delete',
+            ] : null,
+            $user->can('delete', $team) ? [
+                'name' => 'Team Danger Zone',
+                'type' => 'navigation',
+                'description' => 'Delete this team',
+                'link' => route('team.danger-zone'),
+                'search_text' => 'team danger zone delete remove',
+            ] : null,
+            [
+                'name' => 'API Tokens',
+                'type' => 'navigation',
+                'description' => 'Manage API tokens',
+                'link' => route('security.api-tokens'),
+                'search_text' => 'security api tokens personal access token',
+            ],
+            $user->can('viewAny', CloudProviderToken::class) ? [
+                'name' => 'Cloud Tokens',
+                'type' => 'navigation',
+                'description' => 'Manage cloud provider tokens',
+                'link' => route('security.cloud-tokens'),
+                'search_text' => 'security cloud provider tokens hetzner digitalocean',
+            ] : null,
+            $user->can('viewAny', IntegrationToken::class) ? [
+                'name' => 'Integration Tokens',
+                'type' => 'navigation',
+                'description' => 'Manage integration tokens',
+                'link' => route('security.integration-tokens'),
+                'search_text' => 'security integration tokens',
+            ] : null,
+            [
+                'name' => 'Discord Notifications',
+                'type' => 'navigation',
+                'description' => 'Configure Discord notifications',
+                'link' => route('notifications.discord'),
+                'search_text' => 'notifications alerts discord webhook',
+            ],
+            [
+                'name' => 'Telegram Notifications',
+                'type' => 'navigation',
+                'description' => 'Configure Telegram notifications',
+                'link' => route('notifications.telegram'),
+                'search_text' => 'notifications alerts telegram bot',
+            ],
+            [
+                'name' => 'Slack Notifications',
+                'type' => 'navigation',
+                'description' => 'Configure Slack notifications',
+                'link' => route('notifications.slack'),
+                'search_text' => 'notifications alerts slack webhook',
+            ],
+            [
+                'name' => 'Pushover Notifications',
+                'type' => 'navigation',
+                'description' => 'Configure Pushover notifications',
+                'link' => route('notifications.pushover'),
+                'search_text' => 'notifications alerts pushover',
+            ],
+            [
+                'name' => 'Webhook Notifications',
+                'type' => 'navigation',
+                'description' => 'Configure webhook notifications',
+                'link' => route('notifications.webhook'),
+                'search_text' => 'notifications alerts webhook http',
+            ],
+            [
+                'name' => 'Appearance',
+                'type' => 'navigation',
+                'description' => 'Change theme and display preferences',
+                'link' => route('profile.appearance'),
+                'search_text' => 'profile appearance theme dark light mode preferences',
+            ],
+            isCloud() && $user->isAdmin() ? [
+                'name' => 'Subscription',
+                'type' => 'navigation',
+                'description' => 'Manage your subscription and billing',
+                'link' => route('subscription.show'),
+                'search_text' => 'subscription billing plan payment invoices',
+            ] : null,
+        ])->filter();
+
+        // Add instance settings only for self-hosted and root team
+        if (! isCloud() && $team->id === 0) {
+            $navigation->push(
+                [
+                    'name' => 'Settings',
+                    'type' => 'navigation',
+                    'description' => 'Instance settings and configuration',
+                    'link' => route('settings.index'),
+                    'search_text' => 'settings general configuration instance url domain name timezone public ip https redirect',
+                ],
+                [
+                    'name' => 'Advanced Settings',
+                    'type' => 'navigation',
+                    'description' => 'Registration, API access, MCP server, DNS validation and telemetry',
+                    'link' => route('settings.advanced'),
+                    'search_text' => 'settings advanced registration api access allowed ips mcp server dns validation custom dns domain connect confirmation telemetry sponsorship cdn',
+                ],
+                [
+                    'name' => 'Update Settings',
+                    'type' => 'navigation',
+                    'description' => 'Configure Coolify auto updates',
+                    'link' => route('settings.updates'),
+                    'search_text' => 'settings updates auto update upgrade version frequency',
+                ],
+                [
+                    'name' => 'Instance Backup',
+                    'type' => 'navigation',
+                    'description' => 'Back up the Coolify instance database',
+                    'link' => route('settings.backup'),
+                    'search_text' => 'settings instance backup coolify database restore',
+                ],
+                [
+                    'name' => 'Instance Email',
+                    'type' => 'navigation',
+                    'description' => 'Configure SMTP or Resend for system emails',
+                    'link' => route('settings.email'),
+                    'search_text' => 'settings instance email smtp resend transactional mail',
+                ],
+                [
+                    'name' => 'Authentication',
+                    'type' => 'navigation',
+                    'description' => 'Configure OAuth login providers',
+                    'link' => route('settings.oauth'),
+                    'search_text' => 'settings authentication oauth sso login providers github google gitlab azure',
+                ],
+            );
+        }
+
+        return $navigation;
     }
 
     private function search()
@@ -1039,6 +1244,7 @@ class GlobalSearch extends Component
                 'quickcommand' => '(type: new postgresql)',
                 'type' => 'postgresql',
                 'category' => 'Databases',
+                'logo' => 'svgs/postgresql.svg',
                 'resourceType' => 'database',
             ]);
 
@@ -1048,6 +1254,7 @@ class GlobalSearch extends Component
                 'quickcommand' => '(type: new mysql)',
                 'type' => 'mysql',
                 'category' => 'Databases',
+                'logo' => 'svgs/mysql.svg',
                 'resourceType' => 'database',
             ]);
 
@@ -1057,6 +1264,7 @@ class GlobalSearch extends Component
                 'quickcommand' => '(type: new mariadb)',
                 'type' => 'mariadb',
                 'category' => 'Databases',
+                'logo' => 'svgs/mariadb.svg',
                 'resourceType' => 'database',
             ]);
 
@@ -1066,6 +1274,7 @@ class GlobalSearch extends Component
                 'quickcommand' => '(type: new redis)',
                 'type' => 'redis',
                 'category' => 'Databases',
+                'logo' => 'svgs/redis.svg',
                 'resourceType' => 'database',
             ]);
 
@@ -1075,6 +1284,7 @@ class GlobalSearch extends Component
                 'quickcommand' => '(type: new keydb)',
                 'type' => 'keydb',
                 'category' => 'Databases',
+                'logo' => 'svgs/keydb.svg',
                 'resourceType' => 'database',
             ]);
 
@@ -1084,6 +1294,7 @@ class GlobalSearch extends Component
                 'quickcommand' => '(type: new dragonfly)',
                 'type' => 'dragonfly',
                 'category' => 'Databases',
+                'logo' => 'svgs/dragonfly.svg',
                 'resourceType' => 'database',
             ]);
 
@@ -1093,6 +1304,7 @@ class GlobalSearch extends Component
                 'quickcommand' => '(type: new mongodb)',
                 'type' => 'mongodb',
                 'category' => 'Databases',
+                'logo' => 'svgs/mongodb.svg',
                 'resourceType' => 'database',
             ]);
 
@@ -1102,6 +1314,17 @@ class GlobalSearch extends Component
                 'quickcommand' => '(type: new clickhouse)',
                 'type' => 'clickhouse',
                 'category' => 'Databases',
+                'logo' => 'svgs/clickhouse-icon.svg',
+                'resourceType' => 'database',
+            ]);
+
+            $items->push([
+                'name' => 'SQLite',
+                'description' => 'Lightweight file-based relational database',
+                'quickcommand' => '(type: new sqlite)',
+                'type' => 'sqlite',
+                'category' => 'Databases',
+                'logo' => 'svgs/resources/sqlite.svg',
                 'resourceType' => 'database',
             ]);
         }
@@ -1114,6 +1337,12 @@ class GlobalSearch extends Component
 
     public function navigateToResource($type)
     {
+        if ($type === 'server') {
+            $this->dispatch('closeSearchModal');
+
+            return redirectRoute($this, 'server.create');
+        }
+
         // Find the item by type - check regular items first, then services
         $item = collect($this->creatableItems)->firstWhere('type', $type);
 
@@ -1189,7 +1418,7 @@ class GlobalSearch extends Component
     public function loadDestinations()
     {
         $this->loadingDestinations = true;
-        $server = Server::find($this->selectedServerId);
+        $server = Server::ownedByCurrentTeam()->find($this->selectedServerId);
 
         if (! $server) {
             $this->loadingDestinations = false;
@@ -1266,7 +1495,7 @@ class GlobalSearch extends Component
     public function loadEnvironments()
     {
         $this->loadingEnvironments = true;
-        $project = Project::where('uuid', $this->selectedProjectUuid)->first();
+        $project = Project::ownedByCurrentTeam()->where('uuid', $this->selectedProjectUuid)->first();
 
         if (! $project) {
             $this->loadingEnvironments = false;
@@ -1314,15 +1543,10 @@ class GlobalSearch extends Component
                 'server_id' => $this->selectedServerId,
             ];
 
-            // PostgreSQL requires a database_image parameter
-            if ($this->selectedResourceType === 'postgresql') {
-                $queryParams['database_image'] = 'postgres:16-alpine';
-            }
-
-            $this->redirect(route('project.resource.create', [
+            redirectRoute($this, 'project.resource.create', [
                 'project_uuid' => $this->selectedProjectUuid,
                 'environment_uuid' => $this->selectedEnvironmentUuid,
-            ] + $queryParams));
+            ] + $queryParams);
         }
     }
 
@@ -1339,6 +1563,42 @@ class GlobalSearch extends Component
         $this->availableProjects = [];
         $this->availableEnvironments = [];
         $this->autoOpenResource = null;
+    }
+
+    public function goBack()
+    {
+        // From Environment Selection → go back to Project (if multiple) or further
+        if ($this->selectedProjectUuid !== null) {
+            $this->selectedProjectUuid = null;
+            $this->selectedEnvironmentUuid = null;
+            if (count($this->availableProjects) > 1) {
+                return; // Stop here - user can choose a project
+            }
+        }
+
+        // From Project Selection → go back to Destination (if multiple) or further
+        if ($this->selectedDestinationUuid !== null) {
+            $this->selectedDestinationUuid = null;
+            $this->selectedProjectUuid = null;
+            $this->selectedEnvironmentUuid = null;
+            if (count($this->availableDestinations) > 1) {
+                return; // Stop here - user can choose a destination
+            }
+        }
+
+        // From Destination Selection → go back to Server (if multiple) or cancel
+        if ($this->selectedServerId !== null) {
+            $this->selectedServerId = null;
+            $this->selectedDestinationUuid = null;
+            $this->selectedProjectUuid = null;
+            $this->selectedEnvironmentUuid = null;
+            if (count($this->availableServers) > 1) {
+                return; // Stop here - user can choose a server
+            }
+        }
+
+        // All previous steps were auto-selected, cancel entirely
+        $this->cancelResourceSelection();
     }
 
     public function getFilteredCreatableItemsProperty()
@@ -1450,7 +1710,10 @@ class GlobalSearch extends Component
                 'type' => 'one-click-service-'.$serviceKey,
                 'category' => 'Services',
                 'resourceType' => 'service',
-            ]);
+            ] + service_logo_urls(data_get($service, 'logo')) + array_filter([
+                'amd_only' => data_get($service, 'amd_only') ? true : null,
+                'arm_only' => data_get($service, 'arm_only') ? true : null,
+            ]));
         }
 
         $cachedServices = $items->toArray();

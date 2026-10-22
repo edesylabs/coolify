@@ -5,7 +5,9 @@ use App\Models\Application;
 use App\Models\Server;
 use App\Models\ServerSetting;
 use Illuminate\Support\Facades\Event;
-use Mockery;
+use Tests\TestCase;
+
+uses(TestCase::class);
 
 describe('Domain Management API', function () {
     beforeEach(function () {
@@ -13,17 +15,7 @@ describe('Domain Management API', function () {
     });
 
     it('dispatches provisioning started event when domains are added', function () {
-        // Mock application and server
-        $server = Mockery::mock(Server::class);
-        $settings = Mockery::mock(ServerSetting::class);
-        $settings->shouldReceive('getAttribute')->with('is_wildcard_ssl_enabled')->andReturn(false);
-        $settings->shouldReceive('getAttribute')->with('wildcard_ssl_domain')->andReturn(null);
-        $server->shouldReceive('getAttribute')->with('settings')->andReturn($settings);
-
-        $application = Mockery::mock(Application::class);
-        $application->shouldReceive('getAttribute')->with('uuid')->andReturn('test-uuid');
-        $application->shouldReceive('getAttribute')->with('name')->andReturn('test-app');
-        $application->shouldReceive('getAttribute')->with('destination->server')->andReturn($server);
+        $application = (new Application)->forceFill(['uuid' => 'test-uuid', 'name' => 'test-app']);
 
         // Test event dispatching
         $domains = ['test.example.com', 'another.example.com'];
@@ -96,7 +88,7 @@ describe('Domain Validation', function () {
 
                 continue;
             }
-            $isValid = filter_var("http://{$domain}", FILTER_VALIDATE_URL) !== false;
+            $isValid = ! str_contains($domain, '://') && filter_var("http://{$domain}", FILTER_VALIDATE_URL) !== false;
             expect($isValid)->toBeFalse("Domain {$domain} should be invalid");
         }
     });

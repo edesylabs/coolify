@@ -2,6 +2,8 @@
 
 namespace App\Livewire\Project\Shared;
 
+use App\Support\ValidationPatterns;
+use Closure;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
@@ -16,19 +18,24 @@ class HealthChecks extends Component
     #[Validate(['boolean'])]
     public bool $healthCheckEnabled = false;
 
-    #[Validate(['string'])]
+    #[Validate(['string', 'in:http,cmd'])]
+    public string $healthCheckType = 'http';
+
+    #[Validate(['nullable', 'required_if:healthCheckType,cmd', 'string', 'max:1000', 'regex:/^[a-zA-Z0-9 \-_.\/:=@,+]+$/'])]
+    public ?string $healthCheckCommand = null;
+
+    #[Validate(['required', 'string', 'in:GET,HEAD,POST,OPTIONS'])]
     public string $healthCheckMethod;
 
-    #[Validate(['string'])]
+    #[Validate(['required', 'string', 'in:http,https'])]
     public string $healthCheckScheme;
 
-    #[Validate(['string'])]
     public string $healthCheckHost;
 
-    #[Validate(['nullable', 'string'])]
+    #[Validate(['nullable', 'integer', 'min:1', 'max:65535'])]
     public ?string $healthCheckPort = null;
 
-    #[Validate(['string'])]
+    #[Validate(['required', 'string', 'regex:#^[a-zA-Z0-9/\-_.~%,;]+$#'])]
     public string $healthCheckPath;
 
     #[Validate(['integer'])]
@@ -52,35 +59,50 @@ class HealthChecks extends Component
     #[Validate(['boolean'])]
     public bool $customHealthcheckFound = false;
 
-    protected $rules = [
-        'healthCheckEnabled' => 'boolean',
-        'healthCheckPath' => 'string',
-        'healthCheckPort' => 'nullable|string',
-        'healthCheckHost' => 'string',
-        'healthCheckMethod' => 'string',
-        'healthCheckReturnCode' => 'integer',
-        'healthCheckScheme' => 'string',
-        'healthCheckResponseText' => 'nullable|string',
-        'healthCheckInterval' => 'integer|min:1',
-        'healthCheckTimeout' => 'integer|min:1',
-        'healthCheckRetries' => 'integer|min:1',
-        'healthCheckStartPeriod' => 'integer',
-        'customHealthcheckFound' => 'boolean',
-    ];
+    protected function rules(): array
+    {
+        return [
+            'healthCheckEnabled' => 'boolean',
+            'healthCheckType' => 'string|in:http,cmd',
+            'healthCheckCommand' => ['nullable', 'string', 'max:1000', 'regex:/^[a-zA-Z0-9 \-_.\/:=@,+]+$/'],
+            'healthCheckPath' => ['required', 'string', 'regex:#^[a-zA-Z0-9/\-_.~%,;]+$#'],
+            'healthCheckPort' => 'nullable|integer|min:1|max:65535',
+            'healthCheckHost' => ['required', 'string', function (string $attribute, mixed $value, Closure $fail): void {
+                if (! ValidationPatterns::isValidHealthCheckHost($value)) {
+                    $fail('The health check host must be a hostname, an IPv4 address, or an IPv6 address.');
+                }
+            }],
+            'healthCheckMethod' => 'required|string|in:GET,HEAD,POST,OPTIONS',
+            'healthCheckReturnCode' => 'integer',
+            'healthCheckScheme' => 'required|string|in:http,https',
+            'healthCheckResponseText' => 'nullable|string',
+            'healthCheckInterval' => 'integer|min:1',
+            'healthCheckTimeout' => 'integer|min:1',
+            'healthCheckRetries' => 'integer|min:1',
+            'healthCheckStartPeriod' => 'integer',
+            'customHealthcheckFound' => 'boolean',
+        ];
+    }
 
     public function mount()
     {
-        $this->authorize('view', $this->resource);
-        $this->syncData();
+        try {
+            $this->authorize('view', $this->resource);
+            $this->syncData();
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
     }
 
-    public function syncData(bool $toModel = false): void
+    private function syncData(bool $toModel = false): void
     {
         if ($toModel) {
             $this->validate();
 
             // Sync to model
             $this->resource->health_check_enabled = $this->healthCheckEnabled;
+            $this->resource->health_check_type = $this->healthCheckType;
+            $this->resource->health_check_command = $this->healthCheckCommand;
             $this->resource->health_check_method = $this->healthCheckMethod;
             $this->resource->health_check_scheme = $this->healthCheckScheme;
             $this->resource->health_check_host = $this->healthCheckHost;
@@ -98,6 +120,8 @@ class HealthChecks extends Component
         } else {
             // Sync from model
             $this->healthCheckEnabled = $this->resource->health_check_enabled;
+            $this->healthCheckType = $this->resource->health_check_type ?? 'http';
+            $this->healthCheckCommand = $this->resource->health_check_command;
             $this->healthCheckMethod = $this->resource->health_check_method;
             $this->healthCheckScheme = $this->resource->health_check_scheme;
             $this->healthCheckHost = $this->resource->health_check_host;
@@ -116,9 +140,12 @@ class HealthChecks extends Component
     public function instantSave()
     {
         $this->authorize('update', $this->resource);
+        $this->validate();
 
         // Sync component properties to model
         $this->resource->health_check_enabled = $this->healthCheckEnabled;
+        $this->resource->health_check_type = $this->healthCheckType;
+        $this->resource->health_check_command = $this->healthCheckCommand;
         $this->resource->health_check_method = $this->healthCheckMethod;
         $this->resource->health_check_scheme = $this->healthCheckScheme;
         $this->resource->health_check_host = $this->healthCheckHost;
@@ -132,7 +159,8 @@ class HealthChecks extends Component
         $this->resource->health_check_start_period = $this->healthCheckStartPeriod;
         $this->resource->custom_healthcheck_found = $this->customHealthcheckFound;
         $this->resource->save();
-        $this->dispatch('success', 'Health check updated.');
+        $this->dispatch('success', 'Healthcheck updated.');
+        $this->dispatch('configurationChanged');
     }
 
     public function submit()
@@ -143,6 +171,8 @@ class HealthChecks extends Component
 
             // Sync component properties to model
             $this->resource->health_check_enabled = $this->healthCheckEnabled;
+            $this->resource->health_check_type = $this->healthCheckType;
+            $this->resource->health_check_command = $this->healthCheckCommand;
             $this->resource->health_check_method = $this->healthCheckMethod;
             $this->resource->health_check_scheme = $this->healthCheckScheme;
             $this->resource->health_check_host = $this->healthCheckHost;
@@ -156,7 +186,8 @@ class HealthChecks extends Component
             $this->resource->health_check_start_period = $this->healthCheckStartPeriod;
             $this->resource->custom_healthcheck_found = $this->customHealthcheckFound;
             $this->resource->save();
-            $this->dispatch('success', 'Health check updated.');
+            $this->dispatch('success', 'Healthcheck updated.');
+            $this->dispatch('configurationChanged');
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
@@ -171,6 +202,8 @@ class HealthChecks extends Component
 
             // Sync component properties to model
             $this->resource->health_check_enabled = $this->healthCheckEnabled;
+            $this->resource->health_check_type = $this->healthCheckType;
+            $this->resource->health_check_command = $this->healthCheckCommand;
             $this->resource->health_check_method = $this->healthCheckMethod;
             $this->resource->health_check_scheme = $this->healthCheckScheme;
             $this->resource->health_check_host = $this->healthCheckHost;
@@ -186,10 +219,11 @@ class HealthChecks extends Component
             $this->resource->save();
 
             if ($this->healthCheckEnabled && ! $wasEnabled && $this->resource->isRunning()) {
-                $this->dispatch('info', 'Health check has been enabled. A restart is required to apply the new settings.');
+                $this->dispatch('info', 'Healthcheck has been enabled. A restart is required to apply the new settings.');
             } else {
-                $this->dispatch('success', 'Health check '.($this->healthCheckEnabled ? 'enabled' : 'disabled').'.');
+                $this->dispatch('success', 'Healthcheck '.($this->healthCheckEnabled ? 'enabled' : 'disabled').'.');
             }
+            $this->dispatch('configurationChanged');
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }

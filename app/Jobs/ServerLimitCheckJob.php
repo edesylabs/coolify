@@ -23,7 +23,10 @@ class ServerLimitCheckJob implements ShouldBeEncrypted, ShouldQueue
         return isDev() ? 1 : 3;
     }
 
-    public function __construct(public Team $team) {}
+    public function __construct(public Team $team)
+    {
+        $this->onQueue(webhooks_queue());
+    }
 
     public function handle()
     {
@@ -38,7 +41,7 @@ class ServerLimitCheckJob implements ShouldBeEncrypted, ShouldQueue
                     $server->forceDisableServer();
                     $this->team->notify(new ForceDisabled($server));
                 });
-            } elseif ($number_of_servers_to_disable === 0) {
+            } elseif ($number_of_servers_to_disable <= 0) {
                 $servers->each(function ($server) {
                     if ($server->isForceDisabled()) {
                         $server->forceEnableServer();

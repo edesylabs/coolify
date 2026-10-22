@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\PrivateKey;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use OpenApi\Attributes as OA;
 
@@ -13,6 +14,10 @@ class SecurityController extends Controller
     {
         if (request()->attributes->get('can_read_sensitive', false) === false) {
             $team->makeHidden([
+                'private_key',
+            ]);
+        } else {
+            $team->makeVisible([
                 'private_key',
             ]);
         }
@@ -109,6 +114,7 @@ class SecurityController extends Controller
                 'message' => 'Private Key not found.',
             ], 404);
         }
+        $this->authorize('view', $key);
 
         return response()->json($this->removeSensitiveData($key));
     }
@@ -175,8 +181,9 @@ class SecurityController extends Controller
         if (is_null($teamId)) {
             return invalidTokenResponse();
         }
+        $this->authorize('create', [PrivateKey::class]);
         $return = validateIncomingRequest($request);
-        if ($return instanceof \Illuminate\Http\JsonResponse) {
+        if ($return instanceof JsonResponse) {
             return $return;
         }
         $validator = customApiValidator($request->all(), [
@@ -218,7 +225,7 @@ class SecurityController extends Controller
             ], 422);
         }
         $fingerPrint = PrivateKey::generateFingerprint($request->private_key);
-        $isFingerPrintExists = PrivateKey::fingerprintExists($fingerPrint);
+        $isFingerPrintExists = PrivateKey::fingerprintExists($fingerPrint, teamId: $teamId);
         if ($isFingerPrintExists) {
             return response()->json([
                 'message' => 'Private key already exists.',
@@ -231,6 +238,13 @@ class SecurityController extends Controller
             'private_key' => $request->private_key,
         ]);
 
+        auditLog('api.private_key.created', [
+            'team_id' => $teamId,
+            'private_key_uuid' => $key->uuid,
+            'private_key_name' => $key->name,
+            'fingerprint' => $fingerPrint,
+        ]);
+
         return response()->json(serializeApiResponse([
             'uuid' => $key->uuid,
         ]))->setStatusCode(201);
@@ -239,12 +253,15 @@ class SecurityController extends Controller
     #[OA\Patch(
         summary: 'Update',
         description: 'Update a private key.',
-        path: '/security/keys',
+        path: '/security/keys/{uuid}',
         operationId: 'update-private-key',
         security: [
             ['bearerAuth' => []],
         ],
         tags: ['Private Keys'],
+        parameters: [
+            new OA\Parameter(name: 'uuid', in: 'path', required: true, description: 'Private Key UUID', schema: new OA\Schema(type: 'string')),
+        ],
         requestBody: new OA\RequestBody(
             required: true,
             content: [
@@ -287,6 +304,10 @@ class SecurityController extends Controller
                 ref: '#/components/responses/400',
             ),
             new OA\Response(
+                response: 404,
+                description: 'Private Key not found.',
+            ),
+            new OA\Response(
                 response: 422,
                 ref: '#/components/responses/422',
             ),
@@ -300,7 +321,7 @@ class SecurityController extends Controller
             return invalidTokenResponse();
         }
         $return = validateIncomingRequest($request);
-        if ($return instanceof \Illuminate\Http\JsonResponse) {
+        if ($return instanceof JsonResponse) {
             return $return;
         }
 
@@ -330,7 +351,15 @@ class SecurityController extends Controller
                 'message' => 'Private Key not found.',
             ], 404);
         }
-        $foundKey->update($request->all());
+        $this->authorize('update', $foundKey);
+        $foundKey->update($request->only($allowedFields));
+
+        auditLog('api.private_key.updated', [
+            'team_id' => $teamId,
+            'private_key_uuid' => $foundKey->uuid,
+            'private_key_name' => $foundKey->name,
+            'changed_fields' => array_values(array_intersect($allowedFields, array_keys($request->all()))),
+        ]);
 
         return response()->json(serializeApiResponse([
             'uuid' => $foundKey->uuid,
@@ -406,6 +435,7 @@ class SecurityController extends Controller
         if (is_null($key)) {
             return response()->json(['message' => 'Private Key not found.'], 404);
         }
+        $this->authorize('delete', $key);
 
         if ($key->isInUse()) {
             return response()->json([
@@ -414,7 +444,15 @@ class SecurityController extends Controller
             ], 422);
         }
 
+        $keyUuid = $key->uuid;
+        $keyName = $key->name;
         $key->forceDelete();
+
+        auditLog('api.private_key.deleted', [
+            'team_id' => $teamId,
+            'private_key_uuid' => $keyUuid,
+            'private_key_name' => $keyName,
+        ]);
 
         return response()->json([
             'message' => 'Private Key deleted.',

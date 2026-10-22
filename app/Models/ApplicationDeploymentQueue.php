@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Casts\EncryptedArrayCast;
+use App\Enums\ApplicationDeploymentStatus;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
@@ -16,6 +18,10 @@ use OpenApi\Attributes as OA;
         'application_id' => ['type' => 'string'],
         'deployment_uuid' => ['type' => 'string'],
         'pull_request_id' => ['type' => 'integer'],
+        'docker_registry_image_tag' => ['type' => 'string', 'nullable' => true],
+        'configuration_hash' => ['type' => 'string', 'nullable' => true],
+        'configuration_snapshot' => ['type' => 'object', 'nullable' => true],
+        'configuration_diff' => ['type' => 'object', 'nullable' => true],
         'force_rebuild' => ['type' => 'boolean'],
         'commit' => ['type' => 'string'],
         'status' => ['type' => 'string'],
@@ -33,13 +39,110 @@ use OpenApi\Attributes as OA;
         'deployment_url' => ['type' => 'string'],
         'destination_id' => ['type' => 'string'],
         'only_this_server' => ['type' => 'boolean'],
+        'parent_deployment_uuid' => ['type' => 'string', 'nullable' => true],
         'rollback' => ['type' => 'boolean'],
         'commit_message' => ['type' => 'string'],
     ],
 )]
 class ApplicationDeploymentQueue extends Model
 {
-    protected $guarded = [];
+    /**
+     * Kept in memory only, never saved.
+     *
+     * @var array<array-key, mixed>
+     */
+    private array $remoteSecretsForRedaction = [];
+
+    protected static function booted(): void
+    {
+        static::created(function (ApplicationDeploymentQueue $deployment): void {
+            if (! auth()->check() || ! $deployment->rollback) {
+                return;
+            }
+
+            $application = $deployment->application;
+            $source = $deployment->is_api ? 'api' : 'ui';
+
+            auditLog("{$source}.application.rollback", [
+                'team_id' => $application?->team()?->id,
+                'application_uuid' => $application?->uuid,
+                'application_name' => $application?->name,
+                'deployment_uuid' => $deployment->deployment_uuid,
+                'commit' => $deployment->commit,
+            ]);
+        });
+
+        static::updated(function (ApplicationDeploymentQueue $deployment): void {
+            if (! auth()->check()
+                || ! $deployment->wasChanged('status')
+                || $deployment->status !== ApplicationDeploymentStatus::CANCELLED_BY_USER->value) {
+                return;
+            }
+
+            $application = $deployment->application;
+            $source = $deployment->is_api ? 'api' : 'ui';
+
+            auditLog("{$source}.deployment.cancelled", [
+                'team_id' => $application?->team()?->id,
+                'application_uuid' => $application?->uuid,
+                'application_name' => $application?->name,
+                'deployment_uuid' => $deployment->deployment_uuid,
+            ]);
+        });
+    }
+
+    protected $fillable = [
+        'application_id',
+        'deployment_uuid',
+        'pull_request_id',
+        'docker_registry_image_tag',
+        'configuration_hash',
+        'configuration_snapshot',
+        'configuration_diff',
+        'force_rebuild',
+        'commit',
+        'status',
+        'is_webhook',
+        'logs',
+        'current_process_id',
+        'restart_only',
+        'git_type',
+        'server_id',
+        'application_name',
+        'server_name',
+        'deployment_url',
+        'destination_id',
+        'only_this_server',
+        'parent_deployment_uuid',
+        'rollback',
+        'commit_message',
+        'is_api',
+        'build_server_id',
+        'horizon_job_id',
+        'horizon_job_worker',
+        'finished_at',
+    ];
+
+    /**
+     * The configuration snapshot/diff hold full (decrypted on read) configuration,
+     * including unlocked environment variable values. They are only meant for the
+     * in-app diff modal (which redacts per role) and must never be serialized by the
+     * API, so hide them globally as defense in depth.
+     *
+     * @var array<int, string>
+     */
+    protected $hidden = [
+        'logs',
+        'configuration_snapshot',
+        'configuration_diff',
+    ];
+
+    protected $casts = [
+        'pull_request_id' => 'integer',
+        'finished_at' => 'datetime',
+        'configuration_snapshot' => EncryptedArrayCast::class,
+        'configuration_diff' => EncryptedArrayCast::class,
+    ];
 
     public function application()
     {
@@ -74,6 +177,19 @@ class ApplicationDeploymentQueue extends Model
         return getJobStatus($this->horizon_job_id);
     }
 
+    /**
+     * Horizon drops its job record 'trim.pending' minutes after the push, also while the job runs,
+     * so a missing record counts as running only until the deployment timeout has passed.
+     */
+    public function isHorizonJobActive(): bool
+    {
+        return match ($this->getHorizonJobStatus()) {
+            'reserved' => true,
+            'unknown' => $this->updated_at?->gt(now()->subSeconds($this->server?->settings?->dynamic_timeout ?? 3600)) ?? false,
+            default => false,
+        };
+    }
+
     public function commitMessage()
     {
         if (empty($this->commit_message) || is_null($this->commit_message)) {
@@ -83,45 +199,59 @@ class ApplicationDeploymentQueue extends Model
         return str($this->commit_message)->value();
     }
 
+    /**
+     * @param  array<array-key, mixed>  $secrets
+     */
+    public function redactRemoteSecrets(array $secrets): void
+    {
+        $this->remoteSecretsForRedaction = $secrets;
+    }
+
     private function redactSensitiveInfo($text)
     {
-        $text = remove_iip($text);
+        try {
+            $text = remove_iip($text);
 
-        $app = $this->application;
-        if (! $app) {
-            return $text;
+            $app = $this->application;
+            if (! $app) {
+                return $text;
+            }
+
+            $lockedVars = collect([]);
+
+            if ($app->environment_variables) {
+                $lockedVars = $lockedVars->merge(
+                    $app->environment_variables
+                        ->where('is_shown_once', true)
+                        ->flatMap(fn (EnvironmentVariable $variable): array => $variable->logRedactionValues())
+                        ->filter()
+                );
+            }
+
+            if ($this->pull_request_id !== 0 && $app->environment_variables_preview) {
+                $lockedVars = $lockedVars->merge(
+                    $app->environment_variables_preview
+                        ->where('is_shown_once', true)
+                        ->flatMap(fn (EnvironmentVariable $variable): array => $variable->logRedactionValues())
+                        ->filter()
+                );
+            }
+
+            $lockedVars = $lockedVars->merge(EnvironmentVariable::remoteSecretLogRedactionValues($this->remoteSecretsForRedaction));
+
+            foreach ($lockedVars as $key => $value) {
+                $escapedValue = preg_quote($value, '/');
+                $text = preg_replace(
+                    '/'.$escapedValue.'/',
+                    REDACTED,
+                    $text
+                );
+            }
+
+            return is_string($text) ? $text : REDACTED;
+        } catch (\Throwable) {
+            return REDACTED;
         }
-
-        $lockedVars = collect([]);
-
-        if ($app->environment_variables) {
-            $lockedVars = $lockedVars->merge(
-                $app->environment_variables
-                    ->where('is_shown_once', true)
-                    ->pluck('real_value', 'key')
-                    ->filter()
-            );
-        }
-
-        if ($this->pull_request_id !== 0 && $app->environment_variables_preview) {
-            $lockedVars = $lockedVars->merge(
-                $app->environment_variables_preview
-                    ->where('is_shown_once', true)
-                    ->pluck('real_value', 'key')
-                    ->filter()
-            );
-        }
-
-        foreach ($lockedVars as $key => $value) {
-            $escapedValue = preg_quote($value, '/');
-            $text = preg_replace(
-                '/'.$escapedValue.'/',
-                REDACTED,
-                $text
-            );
-        }
-
-        return $text;
     }
 
     public function addLogEntry(string $message, string $type = 'stdout', bool $hidden = false)

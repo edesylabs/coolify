@@ -29,13 +29,14 @@ class Orchestrator extends Component
     public function mount()
     {
         try {
+            $this->authorize('view', $this->server);
             $this->syncData();
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
     }
 
-    public function syncData(bool $toModel = false)
+    private function syncData(bool $toModel = false): void
     {
         if ($toModel) {
             $this->server->settings->orchestrator = $this->orchestrator;
@@ -60,6 +61,7 @@ class Orchestrator extends Component
     public function instantSave()
     {
         try {
+            $this->authorize('update', $this->server);
             $this->syncData(true);
             $this->dispatch('success', 'Orchestrator settings updated.');
         } catch (\Throwable $e) {
@@ -70,6 +72,7 @@ class Orchestrator extends Component
     public function submit()
     {
         try {
+            $this->authorize('update', $this->server);
             $this->syncData(true);
             $this->dispatch('success', 'Orchestrator settings updated.');
         } catch (\Throwable $e) {
@@ -80,6 +83,7 @@ class Orchestrator extends Component
     public function testKubernetesConnection()
     {
         try {
+            $this->authorize('update', $this->server);
             if ($this->orchestrator !== 'kubernetes') {
                 $this->dispatch('error', 'Server is not configured for Kubernetes.');
 

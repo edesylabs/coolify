@@ -22,6 +22,10 @@ class SslCertificate extends Model
         'dns_provider',
     ];
 
+    protected $hidden = [
+        'ssl_private_key',
+    ];
+
     protected $casts = [
         'ssl_certificate' => 'encrypted',
         'ssl_private_key' => 'encrypted',
@@ -47,5 +51,14 @@ class SslCertificate extends Model
     public function server()
     {
         return $this->belongsTo(Server::class);
+    }
+
+    /**
+     * Whether the database reads its certificate and key from one combined server.pem file
+     * instead of separate server.crt and server.key files.
+     */
+    public function requiresPemKeyFile(): bool
+    {
+        return $this->resource_type === StandaloneMongodb::class;
     }
 }

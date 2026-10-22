@@ -22,15 +22,20 @@ class Show extends Component
     {
         try {
             $this->server = Server::ownedByCurrentTeam()->whereUuid($server_uuid)->firstOrFail();
-            $this->privateKeys = PrivateKey::ownedByCurrentTeam()->get()->where('is_git_related', false);
+            $this->loadPrivateKeys();
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
     }
 
+    private function loadPrivateKeys(): void
+    {
+        $this->privateKeys = PrivateKey::where('team_id', $this->server->team_id)->get()->where('is_git_related', false);
+    }
+
     public function setPrivateKey($privateKeyId)
     {
-        $ownedPrivateKey = PrivateKey::ownedByCurrentTeam()->find($privateKeyId);
+        $ownedPrivateKey = PrivateKey::where('team_id', $this->server->team_id)->find($privateKeyId);
         if (is_null($ownedPrivateKey)) {
             $this->dispatch('error', 'You are not allowed to use this private key.');
 
@@ -55,6 +60,34 @@ class Show extends Component
         }
     }
 
+    public function generatePrivateKey(string $type): void
+    {
+        try {
+            $this->authorize('create', PrivateKey::class);
+            $this->authorize('update', $this->server);
+
+            if (! in_array($type, ['ed25519', 'rsa'], true)) {
+                $this->dispatch('error', 'Invalid private key type.');
+
+                return;
+            }
+
+            $keyData = PrivateKey::generateNewKeyPair($type);
+            $privateKey = PrivateKey::createAndStore([
+                'name' => $keyData['name'],
+                'description' => $keyData['description'],
+                'private_key' => $keyData['private_key'],
+                'team_id' => $this->server->team_id,
+            ]);
+
+            $this->loadPrivateKeys();
+            $this->dispatch('copyPublicKeyToClipboard', publicKey: $privateKey->public_key);
+            $this->dispatch('success', 'Private key created successfully.');
+        } catch (\Throwable $e) {
+            handleError($e, $this);
+        }
+    }
+
     public function checkConnection()
     {
         try {
@@ -63,7 +96,8 @@ class Show extends Component
                 $this->dispatch('success', 'Server is reachable.');
                 $this->dispatch('refreshServerShow');
             } else {
-                $this->dispatch('error', 'Server is not reachable.<br><br>Check this <a target="_blank" class="underline" href="https://coolify.io/docs/knowledge-base/server/openssh">documentation</a> for further help.<br><br>Error: '.$error);
+                $sanitizedError = htmlspecialchars($error ?? '', ENT_QUOTES, 'UTF-8');
+                $this->dispatch('error', 'Server is not reachable.<br><br>Check this <a target="_blank" class="underline" href="https://coolify.io/docs/knowledge-base/server/openssh">documentation</a> for further help.<br><br>Error: '.$sanitizedError);
 
                 return;
             }

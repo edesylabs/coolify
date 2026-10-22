@@ -16,11 +16,12 @@
         <div class="flex flex-col gap-2 py-4">
             <div class="flex flex-col items-end gap-2 xl:flex-row">
                 <x-forms.input id="kubernetesReplicas" label="Replicas" required helper="Number of pod replicas to run" canGate="update" :canResource="$application" />
-                <x-forms.select id="kubernetesServiceType" label="Service Type" helper="How the service is exposed" canGate="update" :canResource="$application">
-                    <option value="ClusterIP">ClusterIP (Internal)</option>
-                    <option value="NodePort">NodePort</option>
-                    <option value="LoadBalancer">LoadBalancer</option>
-                </x-forms.select>
+                <x-forms.listbox id="kubernetesServiceType" label="Service Type" helper="How the service is exposed" canGate="update" :canResource="$application"
+                    :options="[
+                        ['value' => 'ClusterIP', 'label' => 'ClusterIP (Internal)'],
+                        ['value' => 'NodePort', 'label' => 'NodePort'],
+                        ['value' => 'LoadBalancer', 'label' => 'LoadBalancer'],
+                    ]" />
             </div>
 
             <h3 class="pt-4">Advanced Configuration</h3>

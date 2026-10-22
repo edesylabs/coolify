@@ -4,10 +4,13 @@ namespace App\Livewire\Project\Application\Deployment;
 
 use App\Models\Application;
 use App\Models\ApplicationDeploymentQueue;
+use App\Traits\AuditsApplicationSettings;
 use Livewire\Component;
 
 class Show extends Component
 {
+    use AuditsApplicationSettings;
+
     public Application $application;
 
     public ApplicationDeploymentQueue $application_deployment_queue;
@@ -18,12 +21,15 @@ class Show extends Component
 
     public $isKeepAliveOn = true;
 
+    public bool $is_debug_enabled = false;
+
+    public bool $fullscreen = false;
+
+    private bool $deploymentFinishedDispatched = false;
+
     public function getListeners()
     {
-        $teamId = auth()->user()->currentTeam()->id;
-
         return [
-            "echo-private:team.{$teamId},ServiceChecked" => '$refresh',
             'refreshQueue',
         ];
     }
@@ -36,10 +42,11 @@ class Show extends Component
         if (! $project) {
             return redirect()->route('dashboard');
         }
-        $environment = $project->load(['environments'])->environments->where('uuid', request()->route('environment_uuid'))->first()->load(['applications']);
+        $environment = $project->load(['environments'])->environments->where('uuid', request()->route('environment_uuid'))->first();
         if (! $environment) {
-            return redirect()->route('dashboard');
+            abort(404);
         }
+        $environment->load(['applications']);
         $application = $environment->applications->where('uuid', request()->route('application_uuid'))->first();
         if (! $application) {
             return redirect()->route('dashboard');
@@ -56,7 +63,23 @@ class Show extends Component
         $this->application_deployment_queue = $application_deployment_queue;
         $this->horizon_job_status = $this->application_deployment_queue->getHorizonJobStatus();
         $this->deployment_uuid = $deploymentUuid;
+        $this->is_debug_enabled = auth()->user()->isMember()
+            ? false
+            : $this->application->settings->is_debug_enabled;
         $this->isKeepAliveOn();
+    }
+
+    public function toggleDebug()
+    {
+        try {
+            $this->authorize('update', $this->application);
+            $this->application->settings->is_debug_enabled = ! $this->application->settings->is_debug_enabled;
+            $this->saveApplicationSettingsWithAudit($this->application);
+            $this->is_debug_enabled = $this->application->settings->is_debug_enabled;
+            $this->application_deployment_queue->refresh();
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
     }
 
     public function refreshQueue()
@@ -75,24 +98,41 @@ class Show extends Component
 
     public function polling()
     {
-        $this->dispatch('deploymentFinished');
         $this->application_deployment_queue->refresh();
         $this->horizon_job_status = $this->application_deployment_queue->getHorizonJobStatus();
         $this->isKeepAliveOn();
+
+        // Dispatch event when deployment finishes to stop auto-scroll (only once)
+        if (! $this->isKeepAliveOn && ! $this->deploymentFinishedDispatched) {
+            $this->deploymentFinishedDispatched = true;
+            $this->dispatch('deploymentFinished');
+        }
     }
 
     public function getLogLinesProperty()
     {
-        return decode_remote_command_output($this->application_deployment_queue)->map(function ($logLine) {
-            $logLine['line'] = e($logLine['line']);
-            $logLine['line'] = preg_replace(
-                '/(https?:\/\/[^\s]+)/',
-                '<a href="$1" target="_blank" rel="noopener noreferrer" class="underline text-neutral-400">$1</a>',
-                $logLine['line'],
-            );
+        return decode_remote_command_output($this->application_deployment_queue);
+    }
 
-            return $logLine;
-        });
+    public function downloadAllLogs(): string
+    {
+        $this->authorize('update', $this->application);
+
+        $logs = decode_remote_command_output($this->application_deployment_queue, includeAll: true)
+            ->map(function ($line) {
+                $prefix = '';
+                if ($line['hidden']) {
+                    $prefix = '[DEBUG] ';
+                }
+                if (isset($line['command']) && $line['command']) {
+                    $prefix .= '[CMD]: ';
+                }
+
+                return $line['timestamp'].' '.$prefix.trim($line['line']);
+            })
+            ->join("\n");
+
+        return sanitizeLogsForExport($logs);
     }
 
     public function render()

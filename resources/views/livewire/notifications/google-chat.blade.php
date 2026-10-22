@@ -2,7 +2,7 @@
     <x-slot:title>
         Notifications | Coolify
     </x-slot>
-    <x-notification.navbar />
+    <x-notification.settings-layout>
     <form wire:submit='submit' class="flex flex-col gap-4 pb-4">
         <div class="flex items-center gap-2">
             <h2>Google Chat</h2>
@@ -77,4 +77,5 @@
             </div>
         </div>
     </div>
+    </x-notification.settings-layout>
 </div>

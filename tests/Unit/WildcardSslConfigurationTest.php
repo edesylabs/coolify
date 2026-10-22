@@ -3,6 +3,9 @@
 use App\Models\Server;
 use App\Models\ServerSetting;
 use App\Services\DnsProviders\CloudflareProvider;
+use Tests\TestCase;
+
+uses(TestCase::class);
 
 it('can enable wildcard SSL on server settings', function () {
     $server = Mockery::mock(Server::class)->makePartial();
@@ -20,7 +23,7 @@ it('can enable wildcard SSL on server settings', function () {
 });
 
 it('encrypts DNS provider credentials', function () {
-    $settings = new ServerSetting();
+    $settings = new ServerSetting;
     $credentials = [
         'api_token' => 'test-token-123',
         'email' => 'test@example.com',

@@ -2,15 +2,70 @@
 
 namespace App\Models;
 
+use App\Support\DomainPortOverrides;
+use App\Support\DomainUrlParts;
+use App\Traits\HasNoindexDomains;
+use App\Traits\HasRestartLimit;
+use App\Traits\ReleasesManagedDnsRecords;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class ServiceApplication extends BaseModel
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory, HasNoindexDomains, HasRestartLimit, ReleasesManagedDnsRecords, SoftDeletes;
 
-    protected $guarded = [];
+    protected $appends = ['url'];
+
+    protected $fillable = [
+        'service_id',
+        'name',
+        'human_name',
+        'description',
+        'fqdn',
+        'noindex_domains',
+        'redirect',
+        'domain_dns_statuses',
+        'domain_port_overrides',
+        'ports',
+        'exposes',
+        'status',
+        'exclude_from_status',
+        'required_fqdn',
+        'image',
+        'is_log_drain_enabled',
+        'is_include_timestamps',
+        'is_gzip_enabled',
+        'is_stripprefix_enabled',
+        'is_force_https_enabled',
+        'last_online_at',
+        'is_migrated',
+    ];
+
+    /**
+     * Internal DNS check cache — not part of the public API surface.
+     *
+     * @var list<string>
+     */
+    protected $hidden = [
+        'domain_dns_statuses',
+        'domain_port_overrides',
+    ];
+
+    protected $attributes = [
+        'is_force_https_enabled' => true,
+        'max_restart_count' => 0,
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'domain_dns_statuses' => 'array',
+            'domain_port_overrides' => 'array',
+            'noindex_domains' => 'array',
+            'is_force_https_enabled' => 'boolean',
+        ];
+    }
 
     protected static function booted()
     {
@@ -21,7 +76,11 @@ class ServiceApplication extends BaseModel
         });
         static::saving(function ($service) {
             if ($service->isDirty('status')) {
-                $service->forceFill(['last_online_at' => now()]);
+                $service->last_online_at = now();
+            }
+            if ($service->isDirty('fqdn')) {
+                $service->normalizeDomainPortOverrides();
+                $service->syncNoindexDomains();
             }
         });
     }
@@ -29,7 +88,7 @@ class ServiceApplication extends BaseModel
     public function restart()
     {
         $container_id = $this->name.'-'.$this->service->uuid;
-        instant_remote_process(["docker restart {$container_id}"], $this->service->server);
+        instant_remote_process(['docker restart '.escapeshellarg($container_id)], $this->service->server);
     }
 
     public static function ownedByCurrentTeamAPI(int $teamId)
@@ -37,9 +96,23 @@ class ServiceApplication extends BaseModel
         return ServiceApplication::whereRelation('service.environment.project.team', 'id', $teamId)->orderBy('name');
     }
 
+    /**
+     * Get query builder for service applications owned by current team.
+     * If you need all service applications without further query chaining, use ownedByCurrentTeamCached() instead.
+     */
     public static function ownedByCurrentTeam()
     {
         return ServiceApplication::whereRelation('service.environment.project.team', 'id', currentTeam()->id)->orderBy('name');
+    }
+
+    /**
+     * Get all service applications owned by current team (cached for request duration).
+     */
+    public static function ownedByCurrentTeamCached()
+    {
+        return once(function () {
+            return ServiceApplication::ownedByCurrentTeam()->get();
+        });
     }
 
     public function isRunning()
@@ -67,6 +140,11 @@ class ServiceApplication extends BaseModel
         return data_get($this, 'is_gzip_enabled', true);
     }
 
+    public function isForceHttpsEnabled(): bool
+    {
+        return $this->is_force_https_enabled;
+    }
+
     public function type()
     {
         return 'service';
@@ -74,7 +152,7 @@ class ServiceApplication extends BaseModel
 
     public function team()
     {
-        return data_get($this, 'environment.project.team');
+        return data_get($this, 'service.environment.project.team');
     }
 
     public function workdir()
@@ -124,6 +202,45 @@ class ServiceApplication extends BaseModel
     }
 
     /**
+     * Return editable URLs with persisted overrides or legacy embedded ports.
+     */
+    protected function url(): Attribute
+    {
+        return Attribute::make(
+            get: function (): ?string {
+                if (blank($this->fqdn)) {
+                    return null;
+                }
+
+                $overrides = $this->domain_port_overrides ?? [];
+
+                return collect(explode(',', $this->fqdn))
+                    ->map(function (string $url) use ($overrides): string {
+                        $url = trim($url);
+                        $canonical = DomainPortOverrides::withoutPort($url);
+                        $port = $overrides[$canonical] ?? null;
+
+                        if ($port === null) {
+                            return $url;
+                        }
+
+                        $parts = DomainUrlParts::split($canonical);
+
+                        return DomainUrlParts::compose($parts['scheme'], $parts['host'], (string) $port, $parts['path']);
+                    })
+                    ->implode(',');
+            },
+        );
+    }
+
+    public function setEditableUrls(?string $urls): void
+    {
+        $normalized = DomainPortOverrides::normalize($urls, null);
+        $this->fqdn = $normalized['fqdn'];
+        $this->domain_port_overrides = $normalized['overrides'];
+    }
+
+    /**
      * Extract port number from a given FQDN URL.
      * Returns null if no port is specified.
      */
@@ -142,6 +259,58 @@ class ServiceApplication extends BaseModel
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    /**
+     * True when saving this URL should confirm that it does not use the required template port.
+     */
+    public function portRequiresConfirmation(string $fqdn, ?int $requiredPort, ?string $previousFqdn = null): bool
+    {
+        if ($requiredPort === null) {
+            return false;
+        }
+
+        $fqdn = trim($fqdn);
+        if ($fqdn === '') {
+            return false;
+        }
+
+        $canonical = DomainPortOverrides::withoutPort($fqdn);
+        $explicit = self::extractPortFromUrl($fqdn);
+
+        if ($explicit === $requiredPort) {
+            return false;
+        }
+
+        if ($explicit === null) {
+            $previous = collect(explode(',', (string) $previousFqdn))
+                ->filter();
+            $previousUrl = $previous->first(
+                fn (string $url): bool => DomainPortOverrides::withoutPort(trim($url)) === $canonical
+            );
+
+            if (is_string($previousUrl) && self::extractPortFromUrl($previousUrl) !== null) {
+                return true;
+            }
+
+            return $previousUrl === null;
+        }
+
+        $existingOverride = $this->domain_port_overrides[$canonical] ?? null;
+
+        return (int) $existingOverride !== $explicit;
+    }
+
+    public static function withoutPort(string $url): string
+    {
+        return DomainPortOverrides::withoutPort($url);
+    }
+
+    protected function normalizeDomainPortOverrides(): void
+    {
+        $normalized = DomainPortOverrides::normalize($this->fqdn, $this->domain_port_overrides);
+        $this->fqdn = $normalized['fqdn'];
+        $this->domain_port_overrides = $normalized['overrides'];
     }
 
     /**
@@ -189,67 +358,135 @@ class ServiceApplication extends BaseModel
     public function getRequiredPort(): ?int
     {
         try {
-            // Normalize container name same way as variable creation
-            // (uppercase, replace - and . with _)
-            $normalizedName = str($this->name)
-                ->upper()
-                ->replace('-', '_')
-                ->replace('.', '_')
-                ->value();
-            // Get all environment variables from the service
-            $serviceEnvVars = $this->service->environment_variables()->get();
+            // Parse the Docker Compose to find SERVICE_URL/SERVICE_FQDN variables DIRECTLY DECLARED
+            // for this specific service container (not just referenced from other containers)
+            $dockerComposeRaw = data_get($this->service, 'docker_compose_raw');
+            if (! $dockerComposeRaw) {
+                // Fall back to service-level port if no compose file
+                return $this->service->getRequiredPort();
+            }
 
-            // Look for SERVICE_FQDN_* or SERVICE_URL_* variables that match this container
-            foreach ($serviceEnvVars as $envVar) {
-                $key = str($envVar->key);
+            $dockerCompose = parseDockerComposeYaml($dockerComposeRaw);
+            $serviceConfig = $dockerCompose['services'][$this->name] ?? null;
+            if (! $serviceConfig) {
+                return $this->service->getRequiredPort();
+            }
 
-                // Check if this is a SERVICE_FQDN_* or SERVICE_URL_* variable
-                if (! $key->startsWith('SERVICE_FQDN_') && ! $key->startsWith('SERVICE_URL_')) {
-                    continue;
-                }
-                // Extract the part after SERVICE_FQDN_ or SERVICE_URL_
-                if ($key->startsWith('SERVICE_FQDN_')) {
-                    $suffix = $key->after('SERVICE_FQDN_');
-                } else {
-                    $suffix = $key->after('SERVICE_URL_');
-                }
+            $environment = data_get($serviceConfig, 'environment', []);
 
-                // Check if this variable starts with our normalized container name
-                // Format: {NORMALIZED_NAME}_{PORT} or just {NORMALIZED_NAME}
-                if (! $suffix->startsWith($normalizedName)) {
-                    \Log::debug('[ServiceApplication::getRequiredPort] Suffix does not match container', [
-                        'expected_start' => $normalizedName,
-                        'actual_suffix' => $suffix->value(),
-                    ]);
+            // Extract SERVICE_URL and SERVICE_FQDN variables DIRECTLY DECLARED in this service's environment
+            // (not variables that are merely referenced with ${VAR} syntax)
+            $portFound = null;
+            $declaresHttpUrl = false;
+            foreach ($environment as $key => $value) {
+                if (is_int($key) && is_string($value)) {
+                    // List-style: "- SERVICE_URL_APP_3000" or "- SERVICE_URL_APP_3000=value"
+                    // Extract variable name (before '=' if present)
+                    $envVarName = str($value)->before('=')->trim();
 
-                    continue;
-                }
+                    // Only process direct declarations
+                    if ($envVarName->startsWith('SERVICE_FQDN_') || $envVarName->startsWith('SERVICE_URL_')) {
+                        $declaresHttpUrl = true;
+                        // Parse to check if it has a port suffix
+                        $parsed = parseServiceEnvironmentVariable($envVarName->value());
+                        if ($parsed['has_port'] && $parsed['port']) {
+                            // Found a port-specific variable for this service
+                            $portFound = (int) $parsed['port'];
+                            break;
+                        }
+                    }
+                } elseif (is_string($key)) {
+                    // Map-style: "SERVICE_URL_APP_3000: value" or "SERVICE_FQDN_DB: localhost"
+                    $envVarName = str($key);
 
-                // Check if there's a port suffix after the container name
-                // The suffix should be exactly NORMALIZED_NAME or NORMALIZED_NAME_PORT
-                $afterName = $suffix->after($normalizedName)->value();
-
-                // If there's content after the name, it should start with underscore
-                if ($afterName !== '' && str($afterName)->startsWith('_')) {
-                    // Extract port: _3210 -> 3210
-                    $port = str($afterName)->after('_')->value();
-                    // Validate that the extracted port is numeric
-                    if (is_numeric($port)) {
-                        \Log::debug('[ServiceApplication::getRequiredPort] MATCH FOUND - Returning port', [
-                            'port' => (int) $port,
-                        ]);
-
-                        return (int) $port;
+                    // Only process direct declarations
+                    if ($envVarName->startsWith('SERVICE_FQDN_') || $envVarName->startsWith('SERVICE_URL_')) {
+                        $declaresHttpUrl = true;
+                        // Parse to check if it has a port suffix
+                        $parsed = parseServiceEnvironmentVariable($envVarName->value());
+                        if ($parsed['has_port'] && $parsed['port']) {
+                            // Found a port-specific variable for this service
+                            $portFound = (int) $parsed['port'];
+                            break;
+                        }
                     }
                 }
             }
 
-            // Fall back to service-level port if no port-specific variable is found
-            $fallbackPort = $this->service->getRequiredPort();
+            // If a port was found in the template, return it
+            if ($portFound !== null) {
+                return $portFound;
+            }
 
-            return $fallbackPort;
+            $composePort = firstDockerComposeServicePort($serviceConfig);
+            if ($composePort !== null) {
+                return $composePort;
+            }
+
+            // HTTP-facing compose services that only declare SERVICE_URL/FQDN (no _PORT
+            // suffix), such as WordPress, inherit the one-click template `# port:`.
+            if ($declaresHttpUrl) {
+                if (blank($this->service->service_type)) {
+                    $savedPort = $this->getSavedLegacyRoutingPort($serviceConfig);
+                    if ($savedPort !== null) {
+                        return $savedPort;
+                    }
+                }
+
+                return $this->service->getRequiredPort();
+            }
+
+            return null;
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    /**
+     * Preserve only an unambiguous upstream from this legacy container's saved labels.
+     */
+    private function getSavedLegacyRoutingPort(array $serviceConfig): ?int
+    {
+        $savedCompose = parseDockerComposeYaml($this->service->docker_compose ?? '');
+        $savedService = $savedCompose['services'][$this->name] ?? null;
+        $image = $serviceConfig['image'] ?? null;
+        if (! is_string($image) || $image === '' || ($savedService['image'] ?? null) !== $image) {
+            return null;
+        }
+
+        $labels = $savedService['labels'] ?? [];
+        if (! is_array($labels)) {
+            return null;
+        }
+
+        $ports = [];
+        foreach ($labels as $key => $value) {
+            if (is_int($key)) {
+                if (! is_string($value)) {
+                    return null;
+                }
+                [$key, $value] = array_pad(explode('=', $value, 2), 2, null);
+            }
+
+            if (preg_match('/^traefik\.http\.services\.[^.]+\.loadbalancer\.server\.port$/', $key)) {
+                $port = $value;
+            } elseif (preg_match('/^caddy(?:_\d+)?\..*reverse_proxy$/', $key)) {
+                if (! is_string($value) || ! preg_match('/^\{\{upstreams ([0-9]+)\}\}$/', $value, $matches)) {
+                    return null;
+                }
+                $port = $matches[1];
+            } else {
+                continue;
+            }
+
+            if ((! is_string($port) && ! is_int($port)) || ! preg_match('/^[0-9]+$/', (string) $port) || (int) $port < 1 || (int) $port > 65535) {
+                return null;
+            }
+            $ports[] = (int) $port;
+        }
+
+        $ports = array_values(array_unique($ports));
+
+        return count($ports) === 1 ? $ports[0] : null;
     }
 }

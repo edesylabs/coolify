@@ -2,12 +2,19 @@
 
 namespace App\Livewire\Server;
 
-use App\Actions\Server\StartSentinel;
 use App\Actions\Server\StopSentinel;
+use App\Enums\ServerRole;
 use App\Events\ServerReachabilityChanged;
+use App\Models\CloudProviderToken;
 use App\Models\Server;
+use App\Rules\ValidServerIp;
+use App\Services\DigitalOceanService;
+use App\Services\HetznerService;
+use App\Services\ServerTransfer\ServerTransferClaimer;
+use App\Services\VultrService;
 use App\Support\ValidationPatterns;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Locked;
 use Livewire\Component;
@@ -28,6 +35,8 @@ class Show extends Component
 
     public string $port;
 
+    public int $connectionTimeout;
+
     public ?string $validationLogs = null;
 
     public ?string $wildcardDomain = null;
@@ -36,14 +45,16 @@ class Show extends Component
 
     public bool $isUsable;
 
+    #[Locked]
     public bool $isSwarmManager;
 
+    #[Locked]
     public bool $isSwarmWorker;
 
-    public bool $isBuildServer;
+    public string $serverRole;
 
     #[Locked]
-    public bool $isBuildServerLocked = false;
+    public ?string $pendingServerRole = null;
 
     public bool $isMetricsEnabled;
 
@@ -59,8 +70,6 @@ class Show extends Component
 
     public ?string $sentinelCustomUrl = null;
 
-    public bool $isSentinelEnabled;
-
     public bool $isSentinelDebugEnabled;
 
     public ?string $sentinelCustomDockerImage = null;
@@ -69,9 +78,54 @@ class Show extends Component
 
     public ?string $hetznerServerStatus = null;
 
+    public ?string $vultrInstanceStatus = null;
+
+    public ?string $digitalOceanDropletStatus = null;
+
     public bool $hetznerServerManuallyStarted = false;
 
+    public bool $vultrInstanceManuallyStarted = false;
+
+    public bool $digitalOceanDropletManuallyStarted = false;
+
     public bool $isValidating = false;
+
+    // Hetzner linking properties
+    public Collection $availableHetznerTokens;
+
+    public ?int $selectedHetznerTokenId = null;
+
+    public ?string $manualHetznerServerId = null;
+
+    public ?array $matchedHetznerServer = null;
+
+    public ?string $hetznerSearchError = null;
+
+    public bool $hetznerNoMatchFound = false;
+
+    public Collection $availableVultrTokens;
+
+    public ?int $selectedVultrTokenId = null;
+
+    public ?string $manualVultrInstanceId = null;
+
+    public ?array $matchedVultrInstance = null;
+
+    public ?string $vultrSearchError = null;
+
+    public bool $vultrNoMatchFound = false;
+
+    public Collection $availableDigitalOceanTokens;
+
+    public ?int $selectedDigitalOceanTokenId = null;
+
+    public ?string $manualDigitalOceanDropletId = null;
+
+    public ?array $matchedDigitalOceanDroplet = null;
+
+    public ?string $digitalOceanSearchError = null;
+
+    public bool $digitalOceanNoMatchFound = false;
 
     public function getListeners()
     {
@@ -90,16 +144,17 @@ class Show extends Component
         return [
             'name' => ValidationPatterns::nameRules(),
             'description' => ValidationPatterns::descriptionRules(),
-            'ip' => 'required',
-            'user' => 'required',
-            'port' => 'required',
+            'ip' => ['required', new ValidServerIp],
+            'user' => ValidationPatterns::serverUsernameRules(),
+            'port' => 'required|integer|between:1,65535',
+            'connectionTimeout' => 'required|integer|min:1|max:300',
             'validationLogs' => 'nullable',
             'wildcardDomain' => 'nullable|url',
             'isReachable' => 'required',
             'isUsable' => 'required',
             'isSwarmManager' => 'required',
             'isSwarmWorker' => 'required',
-            'isBuildServer' => 'required',
+            'serverRole' => ['required', 'in:deployment,build,both'],
             'isMetricsEnabled' => 'required',
             'sentinelToken' => 'required',
             'sentinelUpdatedAt' => 'nullable',
@@ -107,7 +162,6 @@ class Show extends Component
             'sentinelMetricsHistoryDays' => 'required|integer|min:1',
             'sentinelPushIntervalSeconds' => 'required|integer|min:10',
             'sentinelCustomUrl' => 'nullable|url',
-            'isSentinelEnabled' => 'required',
             'isSentinelDebugEnabled' => 'required',
             'serverTimezone' => 'required',
         ];
@@ -120,7 +174,12 @@ class Show extends Component
             [
                 'ip.required' => 'The IP Address field is required.',
                 'user.required' => 'The User field is required.',
+                ...ValidationPatterns::serverUsernameMessages(),
                 'port.required' => 'The Port field is required.',
+                'connectionTimeout.required' => 'The SSH Connection Timeout field is required.',
+                'connectionTimeout.integer' => 'The SSH Connection Timeout must be an integer.',
+                'connectionTimeout.min' => 'The SSH Connection Timeout must be at least 1 second.',
+                'connectionTimeout.max' => 'The SSH Connection Timeout must not exceed 300 seconds.',
                 'wildcardDomain.url' => 'The Wildcard Domain must be a valid URL.',
                 'sentinelToken.required' => 'The Sentinel Token field is required.',
                 'sentinelMetricsRefreshRateSeconds.required' => 'The Metrics Refresh Rate field is required.',
@@ -143,12 +202,16 @@ class Show extends Component
         try {
             $this->server = Server::ownedByCurrentTeam()->whereUuid($server_uuid)->firstOrFail();
             $this->syncData();
-            if (! $this->server->isEmpty()) {
-                $this->isBuildServerLocked = true;
-            }
             // Load saved Hetzner status and validation state
             $this->hetznerServerStatus = $this->server->hetzner_server_status;
+            $this->vultrInstanceStatus = $this->server->vultr_instance_status;
+            $this->digitalOceanDropletStatus = $this->server->digitalocean_droplet_status;
             $this->isValidating = $this->server->is_validating ?? false;
+
+            // Load cloud provider tokens for linking
+            $this->loadHetznerTokens();
+            $this->loadVultrTokens();
+            $this->loadDigitalOceanTokens();
 
         } catch (\Throwable $e) {
             return handleError($e, $this);
@@ -164,18 +227,19 @@ class Show extends Component
             ->toArray();
     }
 
-    public function syncData(bool $toModel = false)
+    private function syncData(bool $toModel = false): void
     {
         if ($toModel) {
             $this->validate();
-
-            $this->authorize('update', $this->server);
-            if (Server::where('team_id', currentTeam()->id)
-                ->where('ip', $this->ip)
+            $this->ip = Server::normalizeIp($this->ip);
+            // Check only a changed IP, so that an old duplicate does not block saving other fields.
+            $ipChanged = $this->ip !== Server::normalizeIp($this->server->getRawOriginal('ip'));
+            $foundServer = $ipChanged ? Server::where('ip', $this->ip)
                 ->where('id', '!=', $this->server->id)
-                ->exists()) {
+                ->first() : null;
+            if ($foundServer) {
                 $this->ip = $this->server->ip;
-                throw new \Exception('This IP/Domain is already in use by another server in your team.');
+                throw new \Exception('A server with this IP/Domain already exists.');
             }
 
             $this->server->name = $this->name;
@@ -186,17 +250,16 @@ class Show extends Component
             $this->server->validation_logs = $this->validationLogs;
             $this->server->save();
 
-            $this->server->settings->is_swarm_manager = $this->isSwarmManager;
+            $this->server->settings->connection_timeout = $this->connectionTimeout;
             $this->server->settings->wildcard_domain = $this->wildcardDomain;
-            $this->server->settings->is_swarm_worker = $this->isSwarmWorker;
-            $this->server->settings->is_build_server = $this->isBuildServer;
+            // The role is only changed through requestServerRoleChange()/confirmServerRoleChange().
+            $this->serverRole = $this->server->settings->effectiveServerRole()->value;
             $this->server->settings->is_metrics_enabled = $this->isMetricsEnabled;
             $this->server->settings->sentinel_token = $this->sentinelToken;
             $this->server->settings->sentinel_metrics_refresh_rate_seconds = $this->sentinelMetricsRefreshRateSeconds;
             $this->server->settings->sentinel_metrics_history_days = $this->sentinelMetricsHistoryDays;
             $this->server->settings->sentinel_push_interval_seconds = $this->sentinelPushIntervalSeconds;
             $this->server->settings->sentinel_custom_url = $this->sentinelCustomUrl;
-            $this->server->settings->is_sentinel_enabled = $this->isSentinelEnabled;
             $this->server->settings->is_sentinel_debug_enabled = $this->isSentinelDebugEnabled;
 
             if (! validate_timezone($this->serverTimezone)) {
@@ -206,32 +269,57 @@ class Show extends Component
                 $this->server->settings->server_timezone = $this->serverTimezone;
             }
 
+            $changedFields = auditChangedFields($this->server->settings);
             $this->server->settings->save();
+            $this->auditSettingsUpdate($changedFields);
         } else {
             $this->name = $this->server->name;
             $this->description = $this->server->description;
             $this->ip = $this->server->ip;
             $this->user = $this->server->user;
             $this->port = $this->server->port;
+            $this->connectionTimeout = $this->server->settings->connection_timeout;
 
             $this->wildcardDomain = $this->server->settings->wildcard_domain;
             $this->isReachable = $this->server->settings->is_reachable;
             $this->isUsable = $this->server->settings->is_usable;
             $this->isSwarmManager = $this->server->settings->is_swarm_manager;
             $this->isSwarmWorker = $this->server->settings->is_swarm_worker;
-            $this->isBuildServer = $this->server->settings->is_build_server;
+            $this->serverRole = $this->server->settings->effectiveServerRole()->value;
             $this->isMetricsEnabled = $this->server->settings->is_metrics_enabled;
-            $this->sentinelToken = $this->server->settings->sentinel_token;
+            $this->sentinelToken = auth()->user()->can('update', $this->server)
+                ? $this->server->settings->ensureValidSentinelToken()
+                : '';
             $this->sentinelMetricsRefreshRateSeconds = $this->server->settings->sentinel_metrics_refresh_rate_seconds;
             $this->sentinelMetricsHistoryDays = $this->server->settings->sentinel_metrics_history_days;
             $this->sentinelPushIntervalSeconds = $this->server->settings->sentinel_push_interval_seconds;
-            $this->sentinelCustomUrl = $this->server->settings->sentinel_custom_url;
-            $this->isSentinelEnabled = $this->server->settings->is_sentinel_enabled;
+            $this->sentinelCustomUrl = auth()->user()->can('update', $this->server)
+                ? $this->server->settings->sentinel_custom_url
+                : null;
             $this->isSentinelDebugEnabled = $this->server->settings->is_sentinel_debug_enabled;
             $this->sentinelUpdatedAt = $this->server->sentinel_updated_at;
             $this->serverTimezone = $this->server->settings->server_timezone;
             $this->isValidating = $this->server->is_validating ?? false;
         }
+    }
+
+    /**
+     * Server columns are audited by the model. Settings live on ServerSetting, so record their names here.
+     *
+     * @param  array<int, string>  $changedFields
+     */
+    private function auditSettingsUpdate(array $changedFields): void
+    {
+        if ($changedFields === []) {
+            return;
+        }
+
+        auditLog('ui.server.settings_updated', [
+            'team_id' => $this->server->team_id,
+            'server_uuid' => $this->server->uuid,
+            'server_name' => $this->server->name,
+            'changed_fields' => $changedFields,
+        ]);
     }
 
     public function refresh()
@@ -244,7 +332,9 @@ class Show extends Component
         // Only refresh if the event is for this server
         if (isset($event['serverUuid']) && $event['serverUuid'] === $this->server->uuid) {
             $this->server->refresh();
-            $this->syncData();
+            // Only refresh display-only state; never re-sync text-input properties
+            // (would clobber any unsaved typing — see coolify#6062 / #6354 / #9695).
+            $this->sentinelUpdatedAt = $this->server->sentinel_updated_at;
             $this->dispatch('success', 'Sentinel has been restarted successfully.');
         }
     }
@@ -253,6 +343,31 @@ class Show extends Component
     {
         try {
             $this->authorize('update', $this->server);
+            if (! $this->server->canBeValidated()) {
+                $this->dispatch(
+                    'error',
+                    'Cannot revalidate',
+                    'This server was transferred to another Coolify instance. Manage it from the target instance instead.'
+                );
+
+                return;
+            }
+            if ($this->server->vultr_instance_id) {
+                $status = $this->server->refreshVultrState();
+                $this->server->refresh();
+                $this->vultrInstanceStatus = $this->server->vultr_instance_status;
+                $this->ip = $this->server->ip;
+
+                if (in_array($status, ['stopped', 'suspended', 'deleted'], true)) {
+                    $message = $status === 'deleted'
+                        ? 'Vultr instance is deleted or no longer accessible. Relink this server before validating.'
+                        : 'Vultr instance is '.($status ?? 'not running').'. Power it on before validating.';
+                    $this->dispatch('error', $message);
+
+                    return;
+                }
+            }
+
             $this->validationLogs = $this->server->validation_logs = null;
             $this->server->save();
             $this->dispatch('init', $install);
@@ -261,20 +376,66 @@ class Show extends Component
         }
     }
 
-    public function checkLocalhostConnection()
+    public function toggleManagement(ServerTransferClaimer $claimer): void
     {
-        $this->syncData(true);
-        ['uptime' => $uptime, 'error' => $error] = $this->server->validateConnection();
-        if ($uptime) {
-            $this->dispatch('success', 'Server is reachable.');
-            $this->server->settings->is_reachable = $this->isReachable = true;
-            $this->server->settings->is_usable = $this->isUsable = true;
-            $this->server->settings->save();
-            ServerReachabilityChanged::dispatch($this->server);
-        } else {
-            $this->dispatch('error', 'Server is not reachable.', 'Please validate your configuration and connection.<br><br>Check this <a target="_blank" class="underline" href="https://coolify.io/docs/knowledge-base/server/openssh">documentation</a> for further help. <br><br>Error: '.$error);
+        abort_unless(isDev(), 404);
+        $this->authorize('update', $this->server);
+
+        if ($this->server->isLocalhost()) {
+            $this->dispatch('error', 'The Coolify host cannot be transferred.');
 
             return;
+        }
+
+        if ($this->server->isTransferredAway() && $this->server->team->serverOverflow()) {
+            $this->dispatch('error', 'Your team is over its server limit. Upgrade your subscription or remove a server first.');
+
+            return;
+        }
+
+        if ($this->server->isTransferredAway()) {
+            $claimer->claim($this->server);
+            $event = 'ui.server.management_enabled';
+            $message = 'This Coolify instance now manages the server.';
+        } else {
+            $claimer->markTransferred($this->server, managementDisabled: true);
+            $event = 'ui.server.management_disabled';
+            $message = 'Server automations are disabled on this Coolify instance.';
+        }
+
+        $this->server->refresh();
+        $this->syncData();
+
+        auditLog($event, [
+            'team_id' => $this->server->team_id,
+            'server_uuid' => $this->server->uuid,
+            'server_name' => $this->server->name,
+        ]);
+
+        $this->dispatch('success', $message);
+    }
+
+    public function checkLocalhostConnection()
+    {
+        try {
+            $this->authorize('update', $this->server);
+            $this->syncData(true);
+            ['uptime' => $uptime, 'error' => $error] = $this->server->validateConnection();
+            if ($uptime) {
+                $this->dispatch('success', 'Server is reachable.');
+                $this->server->settings->is_reachable = $this->isReachable = true;
+                $this->server->settings->is_usable = $this->isUsable = true;
+                $this->server->settings->save();
+                ServerReachabilityChanged::dispatch($this->server);
+                $this->server->gatherServerMetadata();
+                $this->server->refresh();
+            } else {
+                $this->dispatch('error', 'Server is not reachable.', 'Please validate your configuration and connection.<br><br>Check this <a target="_blank" class="underline" href="https://coolify.io/docs/knowledge-base/server/openssh">documentation</a> for further help. <br><br>Error: '.$error);
+
+                return;
+            }
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
         }
     }
 
@@ -294,8 +455,8 @@ class Show extends Component
     public function updatedIsSentinelDebugEnabled($value)
     {
         try {
+            // Saving the setting restarts Sentinel (ServerSetting::booted()).
             $this->submit();
-            $this->restartSentinel();
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
@@ -304,54 +465,81 @@ class Show extends Component
     public function updatedIsMetricsEnabled($value)
     {
         try {
+            // Saving the setting restarts Sentinel (ServerSetting::booted()).
             $this->submit();
-            $this->restartSentinel();
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
     }
 
-    public function updatedIsBuildServer($value)
+    public function requestServerRoleChange(): void
     {
         try {
             $this->authorize('update', $this->server);
-            if ($value === true && $this->isSentinelEnabled) {
-                $this->isSentinelEnabled = false;
-                $this->isMetricsEnabled = false;
-                $this->isSentinelDebugEnabled = false;
-                StopSentinel::dispatch($this->server);
-                $this->dispatch('info', 'Sentinel has been disabled as build servers cannot run Sentinel.');
+            $newRole = ServerRole::from($this->serverRole);
+            $currentRole = $this->server->settings()->firstOrFail()->effectiveServerRole();
+
+            if ($newRole === ServerRole::DEPLOYMENT && $this->server->hasEnabledGithubRunners()) {
+                $this->serverRole = $currentRole->value;
+                $this->dispatch('error', 'Disable the GitHub runners before you set this server to deployments only.');
+
+                return;
             }
-            $this->submit();
-            // Dispatch event to refresh the navbar
-            $this->dispatch('refreshServerShow');
+
+            if ($newRole === ServerRole::BUILD && ! $this->server->isEmpty()) {
+                $this->serverRole = $currentRole->value;
+                $this->dispatch('error', 'Move or remove the existing resources before you set this server to build only.');
+
+                return;
+            }
+
+            if ($newRole === ServerRole::DEPLOYMENT && ! Server::buildServers($this->server->team_id)->whereKeyNot($this->server->id)->exists()) {
+                $this->serverRole = $currentRole->value;
+                $this->dispatch('error', 'Add a usable build server before you set this server to deployments only.');
+
+                return;
+            }
+
+            if ($newRole === ServerRole::BOTH && $currentRole !== ServerRole::BOTH) {
+                $this->pendingServerRole = $newRole->value;
+                $this->serverRole = $currentRole->value;
+                $this->dispatch('open-server-role-confirmation');
+
+                return;
+            }
+
+            $this->saveServerRole($newRole);
         } catch (\Throwable $e) {
-            return handleError($e, $this);
+            handleError($e, $this);
         }
     }
 
-    public function updatedIsSentinelEnabled($value)
+    public function confirmServerRoleChange(): void
     {
         try {
-            $this->authorize('manageSentinel', $this->server);
-            if ($value === true) {
-                if ($this->isBuildServer) {
-                    $this->isSentinelEnabled = false;
-                    $this->dispatch('error', 'Sentinel cannot be enabled on build servers.');
-
-                    return;
-                }
-                $customImage = isDev() ? $this->sentinelCustomDockerImage : null;
-                StartSentinel::run($this->server, true, null, $customImage);
-            } else {
-                $this->isMetricsEnabled = false;
-                $this->isSentinelDebugEnabled = false;
-                StopSentinel::dispatch($this->server);
-            }
-            $this->submit();
+            $this->authorize('update', $this->server);
+            $role = ServerRole::from($this->pendingServerRole ?? '');
+            $this->pendingServerRole = null;
+            $this->saveServerRole($role);
         } catch (\Throwable $e) {
-            return handleError($e, $this);
+            handleError($e, $this);
         }
+    }
+
+    private function saveServerRole(ServerRole $role): void
+    {
+        $this->serverRole = $role->value;
+        $this->server->settings->server_role = $role;
+        $this->server->settings->is_build_server = $role === ServerRole::BUILD;
+        if ($role === ServerRole::BUILD && $this->server->isSentinelEnabled()) {
+            $this->isMetricsEnabled = false;
+            $this->isSentinelDebugEnabled = false;
+            $this->server->settings->is_sentinel_enabled = false;
+            StopSentinel::dispatch($this->server);
+            $this->dispatch('info', 'Sentinel has been disabled as build servers cannot run Sentinel.');
+        }
+        $this->submit();
+        $this->dispatch('refreshServerShow');
     }
 
     public function regenerateSentinelToken()
@@ -359,6 +547,11 @@ class Show extends Component
         try {
             $this->authorize('manageSentinel', $this->server);
             $this->server->settings->generateSentinelToken();
+            auditLog('ui.server.sentinel.token_regenerated', [
+                'team_id' => $this->server->team_id,
+                'server_uuid' => $this->server->uuid,
+                'server_name' => $this->server->name,
+            ]);
             $this->dispatch('success', 'Token regenerated. Restarting Sentinel.');
         } catch (\Throwable $e) {
             return handleError($e, $this);
@@ -368,6 +561,7 @@ class Show extends Component
     public function instantSave()
     {
         try {
+            $this->authorize('update', $this->server);
             $this->syncData(true);
         } catch (\Throwable $e) {
             return handleError($e, $this);
@@ -377,13 +571,14 @@ class Show extends Component
     public function checkHetznerServerStatus(bool $manual = false)
     {
         try {
+            $this->authorize('view', $this->server);
             if (! $this->server->hetzner_server_id || ! $this->server->cloudProviderToken) {
                 $this->dispatch('error', 'This server is not associated with a Hetzner Cloud server or token.');
 
                 return;
             }
 
-            $hetznerService = new \App\Services\HetznerService($this->server->cloudProviderToken->token);
+            $hetznerService = new HetznerService($this->server->cloudProviderToken->token);
             $serverData = $hetznerService->getServer($this->server->hetzner_server_id);
 
             $this->hetznerServerStatus = $serverData['status'] ?? null;
@@ -392,6 +587,11 @@ class Show extends Component
             if ($this->server->hetzner_server_status !== $this->hetznerServerStatus) {
                 $this->server->hetzner_server_status = $this->hetznerServerStatus;
                 $this->server->update(['hetzner_server_status' => $this->hetznerServerStatus]);
+            }
+
+            $assignedIp = data_get($serverData, 'public_net.ipv4.ip') ?? hetznerServerIpv6(data_get($serverData, 'public_net.ipv6.ip'));
+            if ($this->server->backfillPlaceholderIp($assignedIp)) {
+                $this->ip = $this->server->ip;
             }
             if ($manual) {
                 $this->dispatch('success', 'Server status refreshed: '.ucfirst($this->hetznerServerStatus ?? 'unknown'));
@@ -417,6 +617,50 @@ class Show extends Component
         }
     }
 
+    public function checkVultrInstanceStatus(bool $manual = false)
+    {
+        try {
+            $this->authorize('view', $this->server);
+            if (! $this->server->vultr_instance_id || ! $this->server->cloudProviderToken) {
+                $this->dispatch('error', 'This server is not associated with a Vultr instance or token.');
+
+                return;
+            }
+
+            $this->vultrInstanceStatus = $this->server->refreshVultrState();
+            $this->server->refresh();
+            $this->ip = $this->server->ip;
+
+            if ($manual) {
+                $this->dispatch('success', 'Instance status refreshed: '.ucfirst($this->vultrInstanceStatus ?? 'unknown'));
+            }
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function checkDigitalOceanDropletStatus(bool $manual = false)
+    {
+        try {
+            $this->authorize('view', $this->server);
+            if (! $this->server->digitalocean_droplet_id || ! $this->server->cloudProviderToken) {
+                $this->dispatch('error', 'This server is not associated with a DigitalOcean droplet or token.');
+
+                return;
+            }
+
+            $this->digitalOceanDropletStatus = $this->server->refreshDigitalOceanState();
+            $this->server->refresh();
+            $this->ip = $this->server->ip;
+
+            if ($manual) {
+                $this->dispatch('success', 'Droplet status refreshed: '.ucfirst($this->digitalOceanDropletStatus ?? 'unknown'));
+            }
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
     public function handleServerValidated($event = null)
     {
         // Check if event is for this server
@@ -424,12 +668,21 @@ class Show extends Component
             return;
         }
 
-        // Refresh server data
+        // Refresh server data and only the display-only state that validation produces.
+        // Never re-sync text-input properties via syncData() — would clobber any
+        // unsaved typing (see coolify#6062 / #6354 / #9695).
         $this->server->refresh();
-        $this->syncData();
-
-        // Update validation state
+        $this->server->settings->refresh();
         $this->isValidating = $this->server->is_validating ?? false;
+        $this->validationLogs = $this->server->validation_logs;
+        $this->isReachable = $this->server->settings->is_reachable;
+        $this->isUsable = $this->server->settings->is_usable;
+
+        // Reload Hetzner tokens in case the linking section should now be shown
+        $this->loadHetznerTokens();
+        $this->loadVultrTokens();
+        $this->loadDigitalOceanTokens();
+
         $this->dispatch('refreshServerShow');
         $this->dispatch('refreshServer');
     }
@@ -437,13 +690,14 @@ class Show extends Component
     public function startHetznerServer()
     {
         try {
+            $this->authorize('update', $this->server);
             if (! $this->server->hetzner_server_id || ! $this->server->cloudProviderToken) {
                 $this->dispatch('error', 'This server is not associated with a Hetzner Cloud server or token.');
 
                 return;
             }
 
-            $hetznerService = new \App\Services\HetznerService($this->server->cloudProviderToken->token);
+            $hetznerService = new HetznerService($this->server->cloudProviderToken->token);
             $hetznerService->powerOnServer($this->server->hetzner_server_id);
 
             $this->hetznerServerStatus = 'starting';
@@ -455,11 +709,497 @@ class Show extends Component
         }
     }
 
+    public function startVultrInstance()
+    {
+        try {
+            $this->authorize('update', $this->server);
+            if (! $this->server->vultr_instance_id || ! $this->server->cloudProviderToken) {
+                $this->dispatch('error', 'This server is not associated with a Vultr instance or token.');
+
+                return;
+            }
+
+            $vultrService = new VultrService($this->server->cloudProviderToken->token);
+            $vultrService->startInstance($this->server->vultr_instance_id);
+
+            $this->vultrInstanceStatus = 'starting';
+            $this->server->update(['vultr_instance_status' => 'starting']);
+            $this->vultrInstanceManuallyStarted = true;
+            $this->dispatch('success', 'Vultr instance is starting...');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function startDigitalOceanDroplet()
+    {
+        try {
+            $this->authorize('update', $this->server);
+            if (! $this->server->digitalocean_droplet_id || ! $this->server->cloudProviderToken) {
+                $this->dispatch('error', 'This server is not associated with a DigitalOcean droplet or token.');
+
+                return;
+            }
+
+            $digitalOceanService = new DigitalOceanService($this->server->cloudProviderToken->token);
+            $digitalOceanService->powerOnDroplet((int) $this->server->digitalocean_droplet_id);
+
+            $this->digitalOceanDropletStatus = 'new';
+            $this->server->update(['digitalocean_droplet_status' => 'new']);
+            $this->digitalOceanDropletManuallyStarted = true;
+            $this->dispatch('success', 'DigitalOcean droplet is starting...');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function refreshServerMetadata(): void
+    {
+        try {
+            $this->authorize('update', $this->server);
+            if (! $this->server->isFunctional()) {
+                $this->dispatch('error', 'Validate the server connection before fetching details.');
+
+                return;
+            }
+
+            $result = $this->server->gatherServerMetadata();
+            if ($result) {
+                $this->server->refresh()->load('settings');
+                $this->dispatch('success', 'Server details refreshed.');
+            } else {
+                $this->dispatch('error', 'Could not collect server details. Check the application logs for the remote command output.');
+            }
+        } catch (\Throwable $e) {
+            handleError($e, $this);
+        }
+    }
+
     public function submit()
     {
         try {
+            $this->authorize('update', $this->server);
             $this->syncData(true);
             $this->dispatch('success', 'Server settings updated.');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function loadHetznerTokens(): void
+    {
+        $this->availableHetznerTokens = CloudProviderToken::where('team_id', $this->server->team_id)
+            ->where('provider', 'hetzner')
+            ->get();
+    }
+
+    public function loadVultrTokens(): void
+    {
+        $this->availableVultrTokens = CloudProviderToken::where('team_id', $this->server->team_id)
+            ->where('provider', 'vultr')
+            ->get();
+    }
+
+    public function loadDigitalOceanTokens(): void
+    {
+        $this->availableDigitalOceanTokens = CloudProviderToken::where('team_id', $this->server->team_id)
+            ->where('provider', 'digitalocean')
+            ->get();
+    }
+
+    #[Computed]
+    public function limaStartCommand(): ?string
+    {
+        if (! isDev()) {
+            return null;
+        }
+
+        return match ($this->server->uuid) {
+            'lima-ubuntu-2404' => 'limactl start --yes --name=coolify-lima-ubuntu-2404 docker/lima/ubuntu-2404.yaml',
+            'lima-ubuntu-2604' => 'limactl start --yes --name=coolify-lima-ubuntu-2604 docker/lima/ubuntu-2604.yaml',
+            default => null,
+        };
+    }
+
+    public function searchHetznerServer(): void
+    {
+        $this->hetznerSearchError = null;
+        $this->hetznerNoMatchFound = false;
+        $this->matchedHetznerServer = null;
+
+        if (! $this->selectedHetznerTokenId) {
+            $this->hetznerSearchError = 'Please select a Hetzner token.';
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableHetznerTokens->firstWhere('id', $this->selectedHetznerTokenId);
+            if (! $token) {
+                $this->hetznerSearchError = 'Invalid token selected.';
+
+                return;
+            }
+
+            $hetznerService = new HetznerService($token->token);
+            $matched = $hetznerService->findServerByIp($this->server->ip);
+
+            if ($matched) {
+                $this->matchedHetznerServer = $matched;
+            } else {
+                $this->hetznerNoMatchFound = true;
+            }
+        } catch (\Throwable $e) {
+            $this->hetznerSearchError = 'Failed to search Hetzner servers: '.$e->getMessage();
+        }
+    }
+
+    public function searchHetznerServerById(): void
+    {
+        $this->hetznerSearchError = null;
+        $this->hetznerNoMatchFound = false;
+        $this->matchedHetznerServer = null;
+
+        if (! $this->selectedHetznerTokenId) {
+            $this->hetznerSearchError = 'Please select a Hetzner token first.';
+
+            return;
+        }
+
+        if (! $this->manualHetznerServerId) {
+            $this->hetznerSearchError = 'Please enter a Hetzner Server ID.';
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableHetznerTokens->firstWhere('id', $this->selectedHetznerTokenId);
+            if (! $token) {
+                $this->hetznerSearchError = 'Invalid token selected.';
+
+                return;
+            }
+
+            $hetznerService = new HetznerService($token->token);
+            $serverData = $hetznerService->getServer((int) $this->manualHetznerServerId);
+
+            if (! empty($serverData)) {
+                $this->matchedHetznerServer = $serverData;
+            } else {
+                $this->hetznerNoMatchFound = true;
+            }
+        } catch (\Throwable $e) {
+            $this->hetznerSearchError = 'Failed to fetch Hetzner server: '.$e->getMessage();
+        }
+    }
+
+    public function linkToHetzner()
+    {
+        if (! $this->matchedHetznerServer) {
+            $this->dispatch('error', 'No Hetzner server selected.');
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableHetznerTokens->firstWhere('id', $this->selectedHetznerTokenId);
+            if (! $token) {
+                $this->dispatch('error', 'Invalid token selected.');
+
+                return;
+            }
+
+            // Verify the server exists and is accessible with the token
+            $hetznerService = new HetznerService($token->token);
+            $serverData = $hetznerService->getServer($this->matchedHetznerServer['id']);
+
+            if (empty($serverData)) {
+                $this->dispatch('error', 'Could not find Hetzner server with ID: '.$this->matchedHetznerServer['id']);
+
+                return;
+            }
+
+            // Update the server with Hetzner details
+            $this->server->update([
+                'cloud_provider_token_id' => $this->selectedHetznerTokenId,
+                'hetzner_server_id' => $this->matchedHetznerServer['id'],
+                'hetzner_server_status' => $serverData['status'] ?? null,
+            ]);
+
+            $this->hetznerServerStatus = $serverData['status'] ?? null;
+
+            // Clear the linking state
+            $this->matchedHetznerServer = null;
+            $this->selectedHetznerTokenId = null;
+            $this->manualHetznerServerId = null;
+            $this->hetznerNoMatchFound = false;
+            $this->hetznerSearchError = null;
+
+            $this->dispatch('success', 'Server successfully linked to Hetzner Cloud!');
+            $this->dispatch('close-modal');
+            $this->dispatch('refreshServerShow');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function searchDigitalOceanDroplet(): void
+    {
+        $this->digitalOceanSearchError = null;
+        $this->digitalOceanNoMatchFound = false;
+        $this->matchedDigitalOceanDroplet = null;
+
+        if (! $this->selectedDigitalOceanTokenId) {
+            $this->digitalOceanSearchError = 'Please select a DigitalOcean token.';
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableDigitalOceanTokens->firstWhere('id', $this->selectedDigitalOceanTokenId);
+            if (! $token) {
+                $this->digitalOceanSearchError = 'Invalid token selected.';
+
+                return;
+            }
+
+            $digitalOceanService = new DigitalOceanService($token->token);
+            $matched = $digitalOceanService->findDropletByIp($this->server->ip);
+
+            if ($matched) {
+                $this->matchedDigitalOceanDroplet = $matched;
+            } else {
+                $this->digitalOceanNoMatchFound = true;
+            }
+        } catch (\Throwable $e) {
+            $this->digitalOceanSearchError = 'Failed to search DigitalOcean droplets: '.$e->getMessage();
+        }
+    }
+
+    public function searchDigitalOceanDropletById(): void
+    {
+        $this->digitalOceanSearchError = null;
+        $this->digitalOceanNoMatchFound = false;
+        $this->matchedDigitalOceanDroplet = null;
+
+        if (! $this->selectedDigitalOceanTokenId) {
+            $this->digitalOceanSearchError = 'Please select a DigitalOcean token first.';
+
+            return;
+        }
+
+        if (! $this->manualDigitalOceanDropletId) {
+            $this->digitalOceanSearchError = 'Please enter a DigitalOcean Droplet ID.';
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableDigitalOceanTokens->firstWhere('id', $this->selectedDigitalOceanTokenId);
+            if (! $token) {
+                $this->digitalOceanSearchError = 'Invalid token selected.';
+
+                return;
+            }
+
+            $digitalOceanService = new DigitalOceanService($token->token);
+            $dropletData = $digitalOceanService->getDroplet((int) $this->manualDigitalOceanDropletId);
+
+            if (! empty($dropletData)) {
+                $this->matchedDigitalOceanDroplet = $dropletData;
+            } else {
+                $this->digitalOceanNoMatchFound = true;
+            }
+        } catch (\Throwable $e) {
+            $this->digitalOceanSearchError = 'Failed to fetch DigitalOcean droplet: '.$e->getMessage();
+        }
+    }
+
+    public function linkToDigitalOcean()
+    {
+        if (! $this->matchedDigitalOceanDroplet) {
+            $this->dispatch('error', 'No DigitalOcean droplet selected.');
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableDigitalOceanTokens->firstWhere('id', $this->selectedDigitalOceanTokenId);
+            if (! $token) {
+                $this->dispatch('error', 'Invalid token selected.');
+
+                return;
+            }
+
+            $digitalOceanService = new DigitalOceanService($token->token);
+            $dropletData = $digitalOceanService->getDroplet((int) $this->matchedDigitalOceanDroplet['id']);
+
+            if (empty($dropletData)) {
+                $this->dispatch('error', 'Could not find DigitalOcean droplet with ID: '.$this->matchedDigitalOceanDroplet['id']);
+
+                return;
+            }
+
+            $ip = $digitalOceanService->getPublicIpAddress($dropletData);
+            $updates = [
+                'cloud_provider_token_id' => $this->selectedDigitalOceanTokenId,
+                'digitalocean_droplet_id' => $this->matchedDigitalOceanDroplet['id'],
+                'digitalocean_droplet_status' => $dropletData['status'] ?? null,
+            ];
+
+            if ($ip) {
+                $updates['ip'] = $ip;
+            }
+
+            $this->server->update($updates);
+            $this->digitalOceanDropletStatus = $dropletData['status'] ?? null;
+
+            $this->matchedDigitalOceanDroplet = null;
+            $this->selectedDigitalOceanTokenId = null;
+            $this->manualDigitalOceanDropletId = null;
+            $this->digitalOceanNoMatchFound = false;
+            $this->digitalOceanSearchError = null;
+
+            $this->dispatch('success', 'Server successfully linked to DigitalOcean!');
+            $this->dispatch('close-modal');
+            $this->dispatch('refreshServerShow');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function searchVultrInstance(): void
+    {
+        $this->vultrSearchError = null;
+        $this->vultrNoMatchFound = false;
+        $this->matchedVultrInstance = null;
+
+        if (! $this->selectedVultrTokenId) {
+            $this->vultrSearchError = 'Please select a Vultr token.';
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableVultrTokens->firstWhere('id', $this->selectedVultrTokenId);
+            if (! $token) {
+                $this->vultrSearchError = 'Invalid token selected.';
+
+                return;
+            }
+
+            $vultrService = new VultrService($token->token);
+            $matched = $vultrService->findInstanceByIp($this->server->ip);
+
+            if ($matched) {
+                $this->matchedVultrInstance = $matched;
+            } else {
+                $this->vultrNoMatchFound = true;
+            }
+        } catch (\Throwable $e) {
+            $this->vultrSearchError = 'Failed to search Vultr instances: '.$e->getMessage();
+        }
+    }
+
+    public function searchVultrInstanceById(): void
+    {
+        $this->vultrSearchError = null;
+        $this->vultrNoMatchFound = false;
+        $this->matchedVultrInstance = null;
+
+        if (! $this->selectedVultrTokenId) {
+            $this->vultrSearchError = 'Please select a Vultr token first.';
+
+            return;
+        }
+
+        if (! $this->manualVultrInstanceId) {
+            $this->vultrSearchError = 'Please enter a Vultr Instance ID.';
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableVultrTokens->firstWhere('id', $this->selectedVultrTokenId);
+            if (! $token) {
+                $this->vultrSearchError = 'Invalid token selected.';
+
+                return;
+            }
+
+            $vultrService = new VultrService($token->token);
+            $instanceData = $vultrService->getInstance($this->manualVultrInstanceId);
+
+            if (! empty($instanceData)) {
+                $this->matchedVultrInstance = $instanceData;
+            } else {
+                $this->vultrNoMatchFound = true;
+            }
+        } catch (\Throwable $e) {
+            $this->vultrSearchError = 'Failed to fetch Vultr instance: '.$e->getMessage();
+        }
+    }
+
+    public function linkToVultr()
+    {
+        if (! $this->matchedVultrInstance) {
+            $this->dispatch('error', 'No Vultr instance selected.');
+
+            return;
+        }
+
+        try {
+            $this->authorize('update', $this->server);
+
+            $token = $this->availableVultrTokens->firstWhere('id', $this->selectedVultrTokenId);
+            if (! $token) {
+                $this->dispatch('error', 'Invalid token selected.');
+
+                return;
+            }
+
+            $vultrService = new VultrService($token->token);
+            $instanceData = $vultrService->getInstance($this->matchedVultrInstance['id']);
+
+            if (empty($instanceData)) {
+                $this->dispatch('error', 'Could not find Vultr instance with ID: '.$this->matchedVultrInstance['id']);
+
+                return;
+            }
+
+            $this->server->update([
+                'cloud_provider_token_id' => $this->selectedVultrTokenId,
+                'vultr_instance_id' => $this->matchedVultrInstance['id'],
+                'vultr_instance_status' => $instanceData['status'] ?? null,
+            ]);
+
+            $this->vultrInstanceStatus = $instanceData['status'] ?? null;
+
+            $this->matchedVultrInstance = null;
+            $this->selectedVultrTokenId = null;
+            $this->manualVultrInstanceId = null;
+            $this->vultrNoMatchFound = false;
+            $this->vultrSearchError = null;
+
+            $this->dispatch('success', 'Server successfully linked to Vultr!');
+            $this->dispatch('close-modal');
+            $this->dispatch('refreshServerShow');
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }

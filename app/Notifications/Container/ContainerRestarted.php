@@ -2,6 +2,7 @@
 
 namespace App\Notifications\Container;
 
+use App\Contracts\ThrottledNotification;
 use App\Models\Server;
 use App\Notifications\CustomEmailNotification;
 use App\Notifications\Dto\DiscordMessage;
@@ -9,11 +10,15 @@ use App\Notifications\Dto\GoogleChatMessage;
 use App\Notifications\Dto\PushoverMessage;
 use App\Notifications\Dto\SlackMessage;
 use App\Notifications\Dto\TeamsMessage;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Notifications\Messages\MailMessage;
 
-class ContainerRestarted extends CustomEmailNotification
+class ContainerRestarted extends CustomEmailNotification implements ThrottledNotification
 {
-    public function __construct(public string $name, public Server $server, public ?string $url = null)
+    /**
+     * When $restartedResource is set, a restart loop of that resource sends at most one notification per hour.
+     */
+    public function __construct(public string $name, public Server $server, public ?string $url = null, public ?Model $restartedResource = null)
     {
         $this->onQueue('high');
     }
@@ -21,6 +26,16 @@ class ContainerRestarted extends CustomEmailNotification
     public function via(object $notifiable): array
     {
         return $notifiable->getEnabledChannels('status_change');
+    }
+
+    public function throttleSubject(): ?Model
+    {
+        return $this->restartedResource;
+    }
+
+    public function throttleIntervalMinutes(): int
+    {
+        return 60;
     }
 
     public function toMail(): MailMessage

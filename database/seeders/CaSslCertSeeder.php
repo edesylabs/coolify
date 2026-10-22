@@ -24,16 +24,7 @@ class CaSslCertSeeder extends Seeder
                 } else {
                     $caCert = $existingCaCert;
                 }
-                $caCertPath = config('constants.coolify.base_config_path').'/ssl/';
-
-                $commands = collect([
-                    "mkdir -p $caCertPath",
-                    "chown -R 9999:root $caCertPath",
-                    "chmod -R 700 $caCertPath",
-                    "rm -rf $caCertPath/coolify-ca.crt",
-                    "echo '{$caCert->ssl_certificate}' > $caCertPath/coolify-ca.crt",
-                    "chmod 644 $caCertPath/coolify-ca.crt",
-                ]);
+                $commands = SslHelper::caCertificateFileCommands($caCert->ssl_certificate);
 
                 remote_process($commands, $server);
             }
